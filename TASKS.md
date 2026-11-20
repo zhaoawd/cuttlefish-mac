@@ -17,3 +17,13 @@
 - [x] 回收已关机实例的组合磁盘全零区块，SHA-256 校验一致。运行目录实际占用从约 23.6 GiB 降至约 8.8 GiB，复用该目录重启后再次通过 ADB 和设置页验证。验收记录见 `.local-cf/logs/darwin-*.log`，Cocoa 截图为 `.local-cf/logs/darwin-cocoa-settings.png`。
 
 构建产物、源码和日志位于 `.local-cf/`。AOSP 卷的挂载点为 `.local-cf/aosp-volume/`。查看同步日志用 `.local-cf/logs/repo-sparse.log`，查看卷内剩余空间用 `df -h .local-cf/aosp-volume`。
+
+## Android 实例 CLI
+
+- [x] 按名称选择直启实例，分别报告 QEMU、ADB 和系统启动状态。
+- [x] 支持单个和拆分 APK 安装、保留数据升级、启动、应用列表和卸载。
+- [x] 支持输入、截图、日志、shell，并用测试 APK 核对恢复副本的应用列表和前台窗口。
+- [x] 支持按控件查询、等待、点击和替换文本。独立测试实例已验证 QMP 运行状态、暂停和块设备读错误。
+- [x] P1 验证同一 UI 流程在两个独立实例上运行。超时可下载控件树和截图；断开所选实例的 ADB 后仍能查询 QMP 和串口。
+- [x] P2 提供经过 Bearer token 认证的本机 HTTP 和 WebSocket 命令接口，复用 CLI 的实例路由和执行逻辑。HTTP 支持上传 APK、下载截图和诊断文件。
+- [x] P2 提供干净克隆、关机后保留应用数据的克隆、磁盘快照保存与恢复。两个临时副本并行运行，各自使用独立的 ADB 端口和写入层。测试结束后可删除快照和已关机的克隆。

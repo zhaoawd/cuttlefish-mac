@@ -6,6 +6,8 @@ import sys
 import tempfile
 import unittest
 
+from cfctl import qmp_status
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class PhoneTest(unittest.TestCase):
     def test_fresh_phone(self):
         archive = Path(os.environ["GUEST_ZIP"]).resolve()
-        with tempfile.TemporaryDirectory(dir=archive.parent) as work:
+        workdir = os.environ.get("CF_TEST_WORKDIR", ROOT / ".local-cf")
+        with tempfile.TemporaryDirectory(dir=workdir) as work:
             phone = Path(work) / "phone"
             with socket.socket() as port:
                 port.bind(("127.0.0.1", 0))
@@ -26,6 +29,9 @@ class PhoneTest(unittest.TestCase):
             cmd = [sys.executable, "-B", ROOT / "phone.py"]
             try:
                 subprocess.run(cmd + ["start"], env=env, check=True, timeout=280)
+                status = qmp_status(phone / ".control/qmp.sock")
+                self.assertTrue(status["query-status"]["running"])
+                self.assertIn("os", [item["device"] for item in status["query-block"]])
                 check = subprocess.check_output(cmd + ["verify"], env=env, text=True, timeout=45)
                 self.assertIn("com.android.settings/", check)
                 self.assertIn("sys.boot_completed=1", check)

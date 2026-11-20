@@ -29,23 +29,36 @@ def adb(*args, connect=False, check=True):
     return result.stdout.strip()
 
 
+def disk_directory(directory):
+    active = directory / ".active-disks"
+    if active.is_symlink():
+        target = active.resolve(strict=True)
+        if target.parent != directory / ".disk-sets":
+            raise ValueError(f"无效的磁盘目录：{target}")
+        return target
+    return directory
+
+
 def start_vm(console_input, boot_log):
+    disks = disk_directory(PHONE)
     for name in ("kernel", "initrd", "userdata-overlay.qcow2", "persistent.raw", "system.qcow2"):
-        if not (PHONE / name).is_file():
-            raise RuntimeError(f"缺少 {PHONE / name}，请先准备设备镜像。")
+        if not (disks / name).is_file():
+            raise RuntimeError(f"缺少 {disks / name}，请先准备设备镜像。")
+    (PHONE / ".control").mkdir(mode=0o700, exist_ok=True)
     args = [
         str(QEMU / "qemu-system-aarch64"), "-name", "Cuttlefish Android 16",
         "-machine", "virt,accel=hvf,gic-version=3", "-cpu", "host", "-smp", "4", "-m", "3072",
         "-nodefaults", "-display", "cocoa", "-g", "720x1280",
-        "-monitor", "none", "-pidfile", str(PHONE / "qemu.pid"),
+        "-monitor", "none", "-qmp", "unix:.control/qmp.sock,server=on,wait=off",
+        "-pidfile", str(PHONE / "qemu.pid"),
         "-serial", "null", "-no-reboot",
-        "-kernel", str(PHONE / "kernel"), "-initrd", str(PHONE / "initrd"),
+        "-kernel", str(disks / "kernel"), "-initrd", str(disks / "initrd"),
         "-append", "console=ttyAMA0 earlycon=pl011,mmio32,0x09000000 printk.devkmsg=on init=/init bootconfig panic=-1",
         "-device", "virtio-gpu-pci,xres=720,yres=1280", "-device", "virtio-rng-pci",
         "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
-        "-drive", f"if=none,id=os,format=qcow2,file={PHONE}/userdata-overlay.qcow2",
+        "-drive", f"if=none,id=os,format=qcow2,file={disks}/userdata-overlay.qcow2",
         "-device", "virtio-blk-pci,drive=os",
-        "-drive", f"if=none,id=persist,format=raw,file={PHONE}/persistent.raw",
+        "-drive", f"if=none,id=persist,format=raw,file={disks}/persistent.raw",
         "-device", "virtio-blk-pci,drive=persist",
         "-nic", f"user,model=virtio-net-pci,restrict=on,hostfwd=tcp:{SERIAL}-10.0.2.15:5555",
         "-device", "virtio-serial-pci,id=virtser,max_ports=31",
@@ -58,15 +71,15 @@ def start_vm(console_input, boot_log):
                                 stderr=log, start_new_session=True)
 
 
-def vm_running():
-    pidfile = PHONE / "qemu.pid"
+def vm_running(directory=PHONE):
+    pidfile = directory / "qemu.pid"
     if not pidfile.is_file():
         return False
     pid = pidfile.read_text().strip()
     if not pid.isdecimal():
         return False
     state = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True)
-    return state.returncode == 0 and str(PHONE / "persistent.raw") in state.stdout
+    return state.returncode == 0 and "qemu-system-aarch64" in state.stdout and str(disk_directory(directory) / "persistent.raw") in state.stdout
 
 
 def launch_and_connect():
