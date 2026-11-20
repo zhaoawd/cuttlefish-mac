@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""按名称控制本机 Android 直启实例。"""
+"""按名称控制本机 Android 直启或 Cuttlefish 实例。"""
 import argparse
 import json
 import math
@@ -16,6 +16,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 
+from cvd_host import CvdHost, NAME as CVD_NAME, run_directory
 from instance_store import LOCAL, clone, delete_clone, devices, snapshot
 from phone import ROOT, vm_running
 
@@ -29,13 +30,22 @@ class UiNotReady(RuntimeError):
 class Device:
     def __init__(self, name, timeout):
         entries = devices()
-        if name not in entries:
+        self.cvd = None
+        if name == CVD_NAME and name not in entries:
+            self.bind_cvd(CvdHost(run_directory()))
+        elif name not in entries:
             raise ValueError(f"未知实例：{name}")
-        self.directory, self.port = entries[name]
+        else:
+            self.directory, self.port = entries[name]
         self.last_tree = None
         self.name = name
         self.serial = f"127.0.0.1:{self.port}"
         self.deadline = time.monotonic() + timeout
+
+    def bind_cvd(self, host):
+        self.cvd = host
+        self.directory, self.port = host.directory, host.port
+        self.serial = f"127.0.0.1:{self.port}"
 
     def run(self, args, *, check=True, binary=False, limit=None, env=None):
         remaining = self.deadline - time.monotonic()
@@ -54,23 +64,34 @@ class Device:
         return self.adb("shell", shlex.join(args))
 
     def status(self):
-        running = vm_running(self.directory)
-        owner = False
-        if running:
+        extra = {}
+        if self.cvd:
+            extra = self.cvd.processes(self)
+            running = extra.pop("qemu")
+            owner = extra.pop("owns_port")
+        else:
+            running = vm_running(self.directory)
+            owner = False
+        if running and not self.cvd:
             pid = (self.directory / "qemu.pid").read_text().strip()
             owner = pid in self.run(["/usr/sbin/lsof", "-nP", "-t", "-a", "-p", pid,
                                      f"-iTCP:{self.port}", "-sTCP:LISTEN"], check=False).splitlines()
         boot = False
+        # 嵌套 Linux 首次启动时，ADB 已在线但拉起 shell 仍可能需要数秒。
+        probe_timeout = 20 if self.cvd and self.name == "linux-1" else 2
         state = "unknown"
         try:
             state = self.adb("get-state", check=False, limit=2)
-            if owner and state == "device":
-                boot = self.adb("shell", "getprop", "sys.boot_completed", limit=2) == "1"
+            if self.cvd and owner and state == "device":
+                actual = self.adb("shell", "getprop", "ro.serialno", limit=probe_timeout)
+                extra["serial_matches"] = actual == self.cvd.serial
+            if running and owner and not extra.get("conflict") and state == "device" and extra.get("serial_matches", True):
+                boot = self.adb("shell", "getprop", "sys.boot_completed", limit=probe_timeout) == "1"
         except subprocess.TimeoutExpired:
             if state == "unknown":
                 state = "timeout"
         return dict(name=self.name, serial=self.serial, qemu=running, owns_port=owner,
-                    adb=state, boot_completed=boot)
+                    adb=state, boot_completed=boot, **extra)
 
     def ready(self, wait=False):
         while True:
@@ -118,9 +139,9 @@ def package_from_apk(device, apk):
         sdk = Path(os.environ.get("ANDROID_HOME", Path.home() / "Library/Android/sdk"))
         tools = sorted(sdk.glob("build-tools/*/aapt2"), key=lambda p: tuple(
             int(x) for x in re.findall(r"\d+", p.parent.name)))
-        if not tools:
-            raise RuntimeError("--launch 需要 Android SDK Build Tools 的 aapt2")
-        aapt = str(tools[-1])
+        aapt = str(tools[-1]) if tools else shutil.which("aapt")
+        if not aapt:
+            raise RuntimeError("--launch 需要 aapt2 或 aapt")
     info = device.run([aapt, "dump", "badging", str(apk)])
     match = re.search(r"^package: name='([^']+)'", info, re.M)
     if not match:
@@ -213,7 +234,7 @@ def serial_echo(directory, deadline):
     return False
 
 
-def qmp_status(path, timeout=3):
+def qmp_status(path, timeout=3, *, include_kvm=False):
     state = {}
     deadline = time.monotonic() + timeout
     with socket.socket(socket.AF_UNIX) as conn:
@@ -239,7 +260,10 @@ def qmp_status(path, timeout=3):
                 greeting = receive()
             if "QMP" not in greeting:
                 raise RuntimeError(f"无效 QMP 握手：{greeting}")
-            for cmd in ("qmp_capabilities", "query-status", "query-block"):
+            commands = ["qmp_capabilities", "query-status", "query-block"]
+            if include_kvm:
+                commands.append("query-kvm")
+            for cmd in commands:
                 conn.sendall(json.dumps({"execute": cmd, "id": cmd}).encode() + b"\n")
                 while True:
                     msg = receive()
@@ -256,18 +280,18 @@ def diagnose(device):
     state = device.status()
     directory = device.directory
     state["free_bytes"] = shutil.disk_usage(directory).free if directory.exists() else None
-    path = directory / ".control/qmp.sock"
-    if state["qemu"] and path.is_socket():
+    path = device.cvd.monitor if device.cvd else directory / ".control/qmp.sock"
+    if state["qemu"] and not state.get("conflict") and path and path.is_socket():
         try:
             remaining = device.deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("QMP 诊断超时")
-            state["qmp"] = qmp_status(path, min(remaining, 3))
+            state["qmp"] = qmp_status(path, min(remaining, 3), include_kvm=device.name == "linux-1")
         except (OSError, ValueError, RuntimeError) as exc:
             state["qmp_error"] = str(exc)
     else:
         state["qmp"] = None
-    if state["qemu"]:
+    if state["qemu"] and not device.cvd:
         try:
             state["serial_echo"] = serial_echo(directory, device.deadline)
         except OSError as exc:
@@ -288,9 +312,10 @@ class UiTimeout(TimeoutError):
         folder = Path(tempfile.mkdtemp(prefix=device.name + "-", dir=root))
         self.artifacts = {}
         self.capture_errors = {}
+        capture_timeout = 60 if device.name == "linux-1" and os.environ.get("CF_LINUX_ACCEL") == "tcg" else 5
         for name in ("tree.xml", "screen.png"):
             try:
-                capture = Device(device.name, 5)
+                capture = Device(device.name, capture_timeout)
                 if name == "screen.png":
                     capture.ready()
                     data = screenshot(capture)
@@ -311,17 +336,27 @@ def execute(args, *, artifacts=None):
     if args.timeout is None:
         args.timeout = 240 if args.group == "snapshot" or (
             args.group == "device" and args.action in ("clone", "start", "stop")) else 30
+        if args.device == "linux-1":
+            if args.group == "device" and args.action in ("start", "wait"):
+                args.timeout = 2400
+            elif os.environ.get("CF_LINUX_ACCEL") == "tcg":
+                args.timeout = 300
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ValueError("--timeout 必须为有限正数")
     if args.group == "api":
         from cf_api import serve
         return serve(args.port, args.ws_port)
     if args.group == "device" and args.action == "list":
-        return [Device(name, args.timeout).status() for name in devices()]
+        return [Device(name, args.timeout).status() for name in dict.fromkeys((*devices(), CVD_NAME))]
     if args.device is None:
         raise ValueError("请用 --device 指定实例")
     d = Device(args.device, args.timeout)
     action = args.action
+    if d.cvd:
+        if args.group == "snapshot" or (args.group == "device" and action in ("clone", "delete")):
+            raise ValueError("此操作仅适用于直启实例的磁盘布局")
+        if args.group == "device" and action in ("start", "stop"):
+            return d.cvd.lifecycle(d, action)
     if args.group == "device":
         if action == "clone":
             return clone(d, args.name, args.port, args.clean)
@@ -352,7 +387,8 @@ def execute(args, *, artifacts=None):
             d.ready()
             return ui(d, args)
         except (TimeoutError, subprocess.TimeoutExpired) as exc:
-            raise UiTimeout(d, action, artifacts or LOCAL / "artifacts") from exc
+            directory = d.cvd.run if d.cvd else LOCAL
+            raise UiTimeout(d, action, artifacts or directory / "artifacts") from exc
     d.ready()
     if args.group == "app":
         if action == "install":

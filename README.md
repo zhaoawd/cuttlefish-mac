@@ -114,7 +114,7 @@ curl -fsS -H "$auth" "$api/v1/files/qa-one.png" -o qa-one.png
 
 `POST /v1/command` 和 WebSocket 的 `/v1/command` 接受相同的 JSON 对象。`args` 为 CLI 子命令及其参数数组，`device` 指定实例，`timeout` 为可选秒数。WebSocket 每条文本消息执行一次命令，按发送顺序返回 JSON。操作成功返回 `ok`、`result`，操作失败返回 `ok: false`、`error`。HTTP 对执行失败返回 422。API 文件位于 `.local-cf/api-files/`，可用 `CF_API_FILES` 指定专用目录。并行任务应为上传文件和截图选择不同文件名。
 
-UI 操作超时时，CLI 在 `.local-cf/artifacts/` 的独立目录保存最近一次控件树和截图。每个诊断文件最多额外等待 5 秒。JSON 返回 `artifacts` 和 `capture_errors`。API 返回可通过认证下载的文件路径，若来宾失联，结果中记录采集失败的原因。
+UI 操作超时时，CLI 将控件树和截图保存到独立目录。直启实例的路径在 `.local-cf/artifacts/` 下，Cuttlefish 实例的路径在 `$CF_RUN/artifacts/` 下。每个诊断文件默认最多额外等待 5 秒，Linux TCG 模式为 60 秒。JSON 返回 `artifacts` 和 `capture_errors`。API 返回可通过认证下载的文件路径，若来宾失联，结果中记录采集失败的原因。
 
 ### 全量回归
 
@@ -181,10 +181,10 @@ unzip -q "$GUEST_ZIP" -d "$CF_RUN"
 
 启动使用实例 1、QEMU、guest SwiftShader、slirp 和 vhost-user vsock。`verify` 等待 `sys.boot_completed=1`，检查 Android 版本和 ABI，然后通过 ADB 打开设置。如果 Cocoa 窗口仍显示锁屏，向上滑动后检查设置页。
 
-正常关机时，先用 ADB 请求 Android 关机。在本次运行的 `$CF_RUN/cuttlefish/instances/cvd-1/logs/kernel.log` 中看到 `reboot: Power down` 后，再执行 `./cf.sh stop` 停止宿主进程。
+正常关机使用实例 CLI。它核对 ADB 监听进程和来宾序列号，请求 Android 关机，等到本次内核日志出现 `reboot: Power down` 后停止宿主进程。
 
 ```sh
-"$CF_RUN/bin/adb" -s 127.0.0.1:6520 shell su 0 reboot -p
+python3 -B cfctl.py --device darwin-1 device stop
 ```
 
 ## 源码与构建
@@ -222,6 +222,7 @@ repo sync -c -j6 --no-tags --fail-fast &&
 ```sh
 git -C build/soong apply "$PROJECT_ROOT/patches/darwin-local-sdk.patch"
 git -C device/google/cuttlefish apply "$PROJECT_ROOT/patches/darwin-guest-renderer.patch"
+git -C device/google/cuttlefish apply "$PROJECT_ROOT/patches/darwin-keyboard-listener.patch"
 git -C external/swiftshader apply "$PROJECT_ROOT/patches/darwin-llvm-config.patch"
 export PATH="/opt/homebrew/opt/gnu-tar/libexec/gnubin:$PATH"
 export CLANG_DEFAULT_DEBUG_LEVEL=debug_level_0
@@ -230,3 +231,82 @@ source build/envsetup.sh &&
   lunch aosp_cf_arm64_phone-bp2a-userdebug &&
   m out/host/darwin-x86/cvd-host_package.tar.gz
 ```
+
+## Cuttlefish 实例和跨宿主回归
+
+在 macOS 上用 `darwin-1` 选择 Darwin 宿主包的实例 1，在 ARM64 Linux 上用 `linux-1` 选择 Linux 宿主包的实例 1。两者都从 `CF_RUN` 下的 Cuttlefish 配置读取实例目录、端口和来宾序列号。应用操作还会检查监听进程归属和 `sys.boot_completed`。克隆与磁盘快照使用前文所述的直启磁盘布局。
+
+```sh
+export CF_RUN="$PWD/.local-cf/run-darwin"
+python3 -B cfctl.py --device darwin-1 device start
+python3 -B cfctl.py --device darwin-1 app install --launch demo.apk
+python3 -B cfctl.py --device darwin-1 doctor
+python3 -B cfctl.py --device darwin-1 device stop
+```
+
+`device stop` 请求 Android 关机，等到内核日志新增 `reboot: Power down` 才调用宿主停止程序，并检查进程及 ADB 端口。Darwin 的键盘套接字补丁见上面的构建命令。更新已有运行目录时，需要在实例停止后把重新构建的 `bin/run_cvd` 安装到该目录。
+
+测试包在装有 Android SDK 和 JDK 的一端生成一次。向另一端提供同一个 ZIP、测试包目录及本仓库代码。输出目录须为新目录。各宿主分别安装与其架构匹配的宿主包，分别运行本机 ADB 服务。Linux 目录内只组装实例 1。
+
+```sh
+python3 -B tests/parity.py prepare --image "$GUEST_ZIP" --bundle "$BUNDLE"
+python3 -B tests/parity.py run --device darwin-1 --bundle "$BUNDLE" \
+  --image "$GUEST_ZIP" --out "$DARWIN_RESULT" --observe original --observe recovered
+```
+
+在已安装 Cuttlefish 宿主依赖的 Linux 节点解压宿主包和设备 ZIP 后执行以下命令。`CF_RUN` 指向解压目录，`aapt2` 或 `aapt` 需在 PATH 中。将两端生成的 `result.json` 放到同一台机器执行 `compare`。
+
+```sh
+export PATH="$CF_RUN/bin:$PATH"
+adb -L tcp:localhost:5037 start-server
+python3 -B cfctl.py --device linux-1 device start
+python3 -B tests/parity.py run --device linux-1 --bundle "$BUNDLE" \
+  --image "$GUEST_ZIP" --out "$LINUX_RESULT"
+python3 -B cfctl.py --device linux-1 device stop
+python3 -B tests/parity.py compare "$DARWIN_RESULT/result.json" "$LINUX_RESULT/result.json"
+```
+
+回归检查前台应用、文本输入、控件点击、升级后数据、异签名升级拒绝和拆分 APK。报告包含镜像与四个 APK 的 SHA-256、来宾构建指纹、宿主可执行文件摘要和各步耗时。截图保存在结果目录。Darwin 启停和写入层持久化另有回归，可在两个直启实例运行、`darwin-1` 已停止时执行。
+
+本机 Darwin/HVF 与下述 Linux ARM64/TCG 节点已通过这六项检查。两端使用 Android CI 构建 14781626，设备 ZIP、四个 APK 的摘要和运行中系统的构建指纹一致。两端均在测试后确认测试包已卸载，Darwin 测试前后，两个直启对照实例各自的应用列表和前台窗口一致。
+
+```sh
+CF_TEST_DARWIN_CYCLE=1 python3 -B -m unittest discover -s tests -p test_cvd.py -v
+```
+
+### 在 Apple Silicon 本机部署 Linux 对照节点
+
+本机采用 Lima 2.3.0、Virtualization.framework 和 Debian 13 ARM64。模板请求 4 个虚拟 CPU、6 GiB 内存和 40 GiB 稀疏磁盘。Mac 须支持嵌套虚拟化。在节点内运行的准备脚本检查 KVM API，安装 Cuttlefish 宿主依赖，并将专用 Btrfs 文件系统挂载到 `$HOME/cvd-qa`。QEMU 组装原始磁盘会写入大量零数据，运行目录使用 Zstandard 压缩。设备 ZIP 和两个宿主包均应保存在版本库之外或被忽略的目录内。
+
+```sh
+limactl start --tty=false --name=cf-qa tests/lima-arm64.yaml
+limactl shell cf-qa -- mkdir -p project/tests
+limactl copy cfctl.py cvd_host.py phone.py prepare_phone.py instance_store.py cf_api.py cf-qa:project/
+limactl copy tests/linux-node.sh tests/parity.py cf-qa:project/tests/
+limactl copy -r linux-tcg cf-qa:project/
+limactl copy "$LINUX_HOST_PACKAGE" cf-qa:host.tar.gz
+limactl copy "$GUEST_ZIP" cf-qa:guest.zip
+limactl copy -r "$BUNDLE" cf-qa:bundle
+limactl shell cf-qa -- bash project/tests/linux-node.sh
+```
+
+本次 Linux 宿主包取自 Android CI 构建 14781626，SHA-256 为 `fd6fb6fdbd7451759c2b654d715d3cb8e27a9ec278a8e183957b5fdad7f2c521`。首次解包前验证归档。后续启动可复用该运行目录。外层 Linux 重启后，重新运行 `tests/linux-node.sh` 挂载已有卷，再进入启停流程。首次变更用户组后，使用有新组权限的登录会话。Lima 的 SSH 连接若仍复用旧用户组，可在节点中执行 `sudo -iu "$USER"` 后继续。[Android CI 宿主包](https://ci.android.com/builds/submitted/14781626/aosp_cf_arm64_only_phone-userdebug/latest/raw/cvd-host_package.tar.gz) · [Cuttlefish 宿主依赖](https://github.com/google/android-cuttlefish) · [Lima VZ](https://lima-vm.io/docs/config/vmtype/vz/)
+
+```sh
+# 在 Linux 节点内的用户主目录执行
+printf '%s  %s\n' fd6fb6fdbd7451759c2b654d715d3cb8e27a9ec278a8e183957b5fdad7f2c521 host.tar.gz \
+  e6bdd6ec3a3e20112bccc477a24b397fec3cb78e8aef5390bdddc8f12f77467b guest.zip | sha256sum -c -
+export CF_RUN="$HOME/cvd-qa" CF_LINUX_ACCEL=tcg
+tar -xzf host.tar.gz -C "$CF_RUN"
+unzip -q guest.zip -d "$CF_RUN"
+cd project
+export GUEST_ZIP="$HOME/guest.zip" BUNDLE="$HOME/bundle" LINUX_RESULT="$HOME/parity-result"
+```
+
+本机 Linux 的外层 vsock CID 为 3，内层实例使用 CID 16。Linux 启动命令采用官方包自带的 QEMU、来宾 SwiftShader、2 个虚拟 CPU 和 3072 MiB 内存。两个宿主均按各自配置中的 ADB 端口寻址。
+
+原生 Linux 宿主默认使用 KVM。本机 Lima 对照节点使用 `CF_LINUX_ACCEL=tcg`，由同一宿主包的 QEMU 执行软件模拟。切换模式前先正常关闭 Android。Linux 对照报告中的 `kvm.enabled` 来自运行中实例的 QMP 查询。
+
+本机的嵌套 KVM 节点可连接 ADB。首次启动时，包管理器设置 `sys.cppreopt` 返回 `Broken pipe`，随后 `system_server` 退出。该节点已正常关机，未完成应用回归。TCG 节点通过启动参数把 `ro.hw_timeout_multiplier` 设为 50，沿用 Cuttlefish 为软件模拟设置的数值。该倍率会影响 Android 服务的超时行为，两端结果用于比较应用功能。
+
+Meta 描述了 Mac 开发与 Linux CI 共用 Cuttlefish 虚拟设备的工作流。本仓库用 Android 16 phone 镜像对照 APK 和 UI 行为。蓝牙、Wi-Fi、蜂窝网络、3D 图形、OTA、Fastboot 和运行中整机快照均未做跨宿主验收。前述快照测试覆盖已关机直启实例的磁盘状态。[Meta 技术文章](https://engineering.fb.com/2026/11/13/android/cuttlefish-on-mac/)

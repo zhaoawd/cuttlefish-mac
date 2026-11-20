@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import patch
 
 import cfctl
+from parity import application, focused, PACKAGE
 
 ROOT = Path(cfctl.__file__).parent
-PACKAGE = "dev.cuttlefish.cfctl.fixture"
 
 
 class RoutingTests(unittest.TestCase):
@@ -59,32 +59,15 @@ class LiveCliTests(unittest.TestCase):
         return data["result"]
 
     def recovered_state(self):
-        windows = self.cli("shell", "dumpsys", "window", target="recovered")
-        focus = next(line.strip() for line in windows.splitlines() if "mCurrentFocus=" in line)
-        return sorted(self.cli("app", "list", target="recovered")), focus
+        def cli(*args):
+            return self.cli(*args, target="recovered")
+
+        return sorted(cli("app", "list")), focused(cli)
 
     def test_install_interact_upgrade_and_isolation(self):
         before = self.recovered_state()
-        self.assertNotIn("package:" + PACKAGE, self.cli("app", "list"))
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             subprocess.run(["bash", ROOT / "tests/apk/build.sh", work], check=True, timeout=120)
-            self.cli("app", "install", str(work / "v1.apk"))
-            self.addCleanup(self.cli, "app", "uninstall", PACKAGE)
-            self.cli("input", "key", "KEYCODE_WAKEUP")
-            self.cli("shell", "wm", "dismiss-keyguard")
-            self.cli("app", "launch", PACKAGE)
-            self.cli("ui", "set-text", "--desc", "Fixture input", "cf test")
-            self.assertTrue(self.cli("ui", "find", "--text", "cf test"))
-            self.cli("ui", "click", "--text", "START")
-            self.assertTrue(self.cli("ui", "wait", "--text", "VERIFIED"))
-            screen = work / "screen.png"
-            self.cli("screen", "capture", str(screen))
-            self.assertTrue(screen.read_bytes().startswith(b"\x89PNG"))
-            self.cli("app", "install", "--launch", str(work / "v2.apk"))
-            self.assertTrue(self.cli("ui", "find", "--text", "VERIFIED"))
-            with self.assertRaisesRegex(RuntimeError, "INSTALL_FAILED_UPDATE_INCOMPATIBLE"):
-                self.cli("app", "install", str(work / "other.apk"))
-            self.cli("app", "install", "--launch", str(work / "v2.apk"), str(work / "split.apk"))
-            self.assertIn("split_config.en.apk", self.cli("shell", "pm", "path", PACKAGE))
-            self.assertEqual(before, self.recovered_state())
+            application(self.cli, work, work, {"checks": {}})
+        self.assertEqual(before, self.recovered_state())

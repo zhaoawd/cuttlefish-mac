@@ -112,7 +112,7 @@ def clone(device, name, port, clean):
     directory = device.directory
     root = home()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if name in devices() or (root / name).exists():
+    if name in ("darwin-1", "linux-1") or name in devices() or (root / name).exists():
         raise ValueError(f"实例已存在：{name}")
     with tempfile.TemporaryDirectory(prefix=".stage-", dir=root) as tmp:
         stage = Path(tmp) / "data"

@@ -4,7 +4,6 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd -P)
 qbin=${QEMU_BINARY_DIR:-"$root/.local-cf/qemu-install/bin"}
 run=${CF_RUN:-"$root/.local-cf/run-darwin"}
-serial=127.0.0.1:6520
 
 fail() { echo "$*" >&2; exit 1; }
 
@@ -33,27 +32,23 @@ case ${1:-} in
       --vhost_user_vsock=true --start_webrtc=false --report_anonymous_usage_stats=n
     ;;
   verify)
-    adb="$run/bin/adb"
-    if [[ ! -x "$adb" ]]; then adb=$(command -v adb) || fail "缺少 adb"; fi
-    "$adb" connect "$serial"
-    for ((attempt=0; attempt<120; attempt++)); do
-      if [[ $("$adb" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]]; then
-        abi=$("$adb" -s "$serial" shell getprop ro.product.cpu.abi | tr -d '\r')
-        release=$("$adb" -s "$serial" shell getprop ro.build.version.release | tr -d '\r')
-        printf 'sys.boot_completed=1\nro.product.cpu.abi=%s\nro.build.version.release=%s\n' "$abi" "$release"
-        [[ "$abi" == arm64-v8a && "$release" == 16 ]] || fail "设备与 Android 16 ARM64 目标不符。"
-        "$adb" -s "$serial" shell input keyevent KEYCODE_WAKEUP
-        "$adb" -s "$serial" shell wm dismiss-keyguard
-        settings=$("$adb" -s "$serial" shell am start -W -a android.settings.SETTINGS | tr -d '\r')
-        printf '%s\n' "$settings"
-        [[ "$settings" == *"Status: ok"* && "$settings" == *"Activity: com.android.settings/"* ]] ||
-          fail "ADB 未确认已打开 Android 设置。"
-        exit 0
-      fi
-      sleep 2
-      "$adb" connect "$serial" >/dev/null 2>&1 || true
-    done
-    fail "等待 $serial 启动超时，请检查 $run/cuttlefish/instances/cvd-1/logs。"
+    if ! command -v adb >/dev/null; then export PATH="$run/bin:$PATH"; fi
+    command -v adb >/dev/null || fail "缺少 adb"
+    env -u ADB_SERVER_SOCKET -u ANDROID_ADB_SERVER_ADDRESS -u ANDROID_ADB_SERVER_PORT \
+      adb -L tcp:localhost:5037 start-server
+    ctl=(python3 -B "$root/cfctl.py" --device darwin-1)
+    export CF_RUN="$run"
+    "${ctl[@]}" --timeout 240 device wait >/dev/null
+    abi=$("${ctl[@]}" shell getprop ro.product.cpu.abi)
+    release=$("${ctl[@]}" shell getprop ro.build.version.release)
+    printf 'sys.boot_completed=1\nro.product.cpu.abi=%s\nro.build.version.release=%s\n' "$abi" "$release"
+    [[ "$abi" == arm64-v8a && "$release" == 16 ]] || fail "设备与 Android 16 ARM64 目标不符。"
+    "${ctl[@]}" input key KEYCODE_WAKEUP
+    "${ctl[@]}" shell wm dismiss-keyguard
+    settings=$("${ctl[@]}" shell am start -W -a android.settings.SETTINGS)
+    printf '%s\n' "$settings"
+    [[ "$settings" == *"Status: ok"* && "$settings" == *"Activity: com.android.settings/"* ]] ||
+      fail "ADB 未确认已打开 Android 设置。"
     ;;
   stop)
     cd "$run"

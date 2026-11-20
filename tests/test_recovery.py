@@ -33,7 +33,7 @@ class RecoveryTest(unittest.TestCase):
             cmd.extend(["--unpack-bootimg", os.environ["UNPACK_BOOTIMG"]])
         with tempfile.TemporaryDirectory(dir=archive.parent) as tmp:
             env = dict(os.environ, HOME=tmp, ANDROID_SDK_HOME=tmp, TMPDIR=tmp,
-                       ANDROID_USER_HOME=str(Path(tmp) / ".android"), ADB_MDNS_AUTO_CONNECT="0")
+                       ANDROID_USER_HOME=str(Path(tmp) / ".android"), ADB_MDNS_AUTO_CONNECT="0", ADB_USB="0")
             client = [adb, "-P", str(server_port)]
             log = Path(tmp) / "console.log"
             with log.open("wb") as output, subprocess.Popen(

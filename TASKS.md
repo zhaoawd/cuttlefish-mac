@@ -27,3 +27,12 @@
 - [x] P1 验证同一 UI 流程在两个独立实例上运行。超时可下载控件树和截图；断开所选实例的 ADB 后仍能查询 QMP 和串口。
 - [x] P2 提供经过 Bearer token 认证的本机 HTTP 和 WebSocket 命令接口，复用 CLI 的实例路由和执行逻辑。HTTP 支持上传 APK、下载截图和诊断文件。
 - [x] P2 提供干净克隆、关机后保留应用数据的克隆、磁盘快照保存与恢复。两个临时副本并行运行，各自使用独立的 ADB 端口和写入层。测试结束后可删除快照和已关机的克隆。
+
+## Cuttlefish 编排与跨宿主对照
+
+- [x] 核对 Darwin 运行配置、实例注册记录、进程树、ADB 监听者和设备序列号。
+- [x] 生成一次性共享测试包，固定 Android CI 14781626 的设备 ZIP 和四个 APK 的 SHA-256。
+- [x] 用相同命令验证 Darwin 两次正常启停、应用升级、UI、对照实例隔离和重启后的数据。
+- [x] 在 Apple Silicon 上部署 Debian ARM64 节点，验证 KVM API 12、QEMU/KVM、内外层独立 vsock CID 和 ADB。嵌套 KVM 首启时 `system_server` 退出，该测试节点已正常关机。
+- [x] 同一 Linux 宿主包通过 QEMU/TCG 启动 Android 16，验证正常关机、仓库 CLI 重启和来宾超时倍率 50。
+- [x] Darwin/HVF 与 Linux ARM64/TCG 使用同一设备 ZIP 和四个 APK。两端的构建指纹和六项应用断言一致，均已验证测试包卸载。报告分别位于 `.local-cf/parity/darwin-matched/result.json` 和 `.local-cf/parity/linux/result.json`。

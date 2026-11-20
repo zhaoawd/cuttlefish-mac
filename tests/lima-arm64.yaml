@@ -1,0 +1,17 @@
+base:
+- template:_images/debian-13
+vmType: vz
+arch: aarch64
+nestedVirtualization: true
+cpus: 4
+memory: 6GiB
+disk: 40GiB
+mounts: []
+containerd:
+  system: false
+  user: false
+portForwards:
+- guestIP: "0.0.0.0"
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
