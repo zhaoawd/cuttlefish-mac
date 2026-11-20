@@ -1,0 +1,34 @@
+diff --git a/build/Android.bp b/build/Android.bp
+index 461b242..a9ece28 100644
+--- a/build/Android.bp
++++ b/build/Android.bp
+@@ -195,7 +195,6 @@ cvd_host_tools = [
+     "unpack_bootimg",
+     "vhost_device_vsock",
+     "vulkan.lvp",
+-    "vulkan.pastel",
+     "webRTC",
+     "webrtc_operator",
+ ]
+@@ -516,7 +515,6 @@ cvd_host_package_customization {
+                 cvd_host_bootloader +
+                 cvd_host_ti50_emulator +
+                 cvd_host_keyboard_config +
+-                cvd_host_swiftshader_files +
+                 cvd_host_lavapipe_files +
+                 cvd_openwrt_images +
+                 cvd_host_netsim_gui_assets +
+@@ -559,7 +557,12 @@ cvd_host_package_customization {
+             enabled: true,
+         },
+         linux: {
+-            deps: cvd_host_tools + cvd_host_tests + cvd_linux_host_tools + cvd_linux_host_tests,
++            deps: cvd_host_tools + cvd_host_tests + cvd_linux_host_tools + cvd_linux_host_tests + ["vulkan.pastel"],
++            multilib: {
++                common: {
++                    deps: cvd_host_swiftshader_files,
++                },
++            },
+         }
+     },
+ }

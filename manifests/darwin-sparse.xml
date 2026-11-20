@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <extend-project name="platform/prebuilts/clang/host/darwin-x86">
+    <sparse-path path="clang-r536225"/>
+    <sparse-path path="clang-stable"/>
+    <sparse-path path="llvm-binutils-stable"/>
+  </extend-project>
+  <extend-project name="platform/prebuilts/clang/host/linux-x86">
+    <sparse-path path="clang-r536225/include/c++/v1"/>
+    <sparse-path path="clang-r536225/include/x86_64-unknown-linux-gnu/c++/v1"/>
+    <sparse-path path="soong"/>
+    <sparse-path path="clang-stable"/>
+    <sparse-path path="llvm-binutils-stable"/>
+  </extend-project>
+  <extend-project name="platform/prebuilts/rust">
+    <sparse-path path="darwin-x86/1.83.0"/>
+    <sparse-path path="linux-x86/1.83.0/src"/>
+    <sparse-path path="linux-x86/1.83.0/lib/rustlib/src/rust"/>
+    <sparse-path path="soong"/>
+  </extend-project>
+</manifest>

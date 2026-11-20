@@ -219,5 +219,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Local Cuttlefish sources, builds, disk images and runtime data.
+/.local-cf/
+
 # Streamlit
 .streamlit/secrets.toml

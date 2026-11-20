@@ -1,0 +1,39 @@
+diff --git a/cc/config/darwin_host.go b/cc/config/darwin_host.go
+index f29fb41..3803dd0 100644
+--- a/cc/config/darwin_host.go
++++ b/cc/config/darwin_host.go
+@@ -15,7 +15,9 @@
+ package config
+ 
+ import (
++	"encoding/json"
+ 	"fmt"
++	"os"
+ 	"os/exec"
+ 	"path/filepath"
+ 	"runtime"
+@@ -140,6 +142,24 @@ var macTools = &macPlatformTools{}
+ 
+ func getMacTools(ctx android.PathContext) *macPlatformTools {
+ 	macTools.once.Do(func() {
++		const clt = "/Library/Developer/CommandLineTools"
++		const localSDK = clt + "/SDKs/MacOSX26.5.sdk"
++		if _, err := os.Stat(fixedDeveloperDir); os.IsNotExist(err) {
++			settings, readErr := os.ReadFile(localSDK + "/SDKSettings.json")
++			if readErr == nil {
++				var metadata struct{ Version string }
++				if err := json.Unmarshal(settings, &metadata); err != nil || metadata.Version != "26.5" {
++					macTools.err = fmt.Errorf("unexpected SDK metadata at %s", localSDK)
++					return
++				}
++				macTools.sdkRoot = localSDK
++				macTools.toolPath = clt + "/usr/bin"
++				macTools.arPath = filepath.Join(macTools.toolPath, "ar")
++				macTools.lipoPath = filepath.Join(macTools.toolPath, "lipo")
++				macTools.stripPath = filepath.Join(macTools.toolPath, "strip")
++				return
++			}
++		}
+ 		xcrunTool := "/usr/bin/xcrun"
+ 
+ 		xcrun := func(args ...string) string {

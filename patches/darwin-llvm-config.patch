@@ -1,0 +1,23 @@
+diff --git a/third_party/llvm-16.0/Android.bp b/third_party/llvm-16.0/Android.bp
+index 35ab101..8241394 100644
+--- a/third_party/llvm-16.0/Android.bp
++++ b/third_party/llvm-16.0/Android.bp
+@@ -1513,9 +1513,17 @@ cc_defaults {
+     export_include_dirs: [
+         "llvm/include",
+         "configs/common/include",
+-        "configs/android/include",
+     ],
+ 
++    target: {
++        darwin: {
++            export_include_dirs: ["configs/darwin/include"],
++        },
++        linux: {
++            export_include_dirs: ["configs/android/include"],
++        },
++    },
++
+     cflags: [
+         "-Wno-ignored-qualifiers",
+         "-Wno-implicit-fallthrough",
