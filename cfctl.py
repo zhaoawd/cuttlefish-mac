@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """按名称控制本机 Android 直启或 Cuttlefish 实例。"""
 import argparse
+import base64
 import json
 import math
 import os
@@ -166,21 +167,38 @@ def tap_node(device, node):
 def replace_text(device, node, key, value, text):
     if node["class"] != "android.widget.EditText" or node.get("password") == "true":
         raise ValueError("set-text 需要普通 EditText")
-    if key == "text" or not re.fullmatch(r"[a-zA-Z0-9 ._@+-]*", text):
-        raise ValueError("请按 id 或 desc 选择控件，文本支持英文字母、数字、空格和 ._@+-")
-    tap_node(device, node)
+    if key == "text":
+        raise ValueError("set-text 请按 id、desc 或焦点选择控件")
+    use_helper = re.fullmatch(r"[a-zA-Z0-9 ._@+-]*", text) is None
+    helper = "dev.cuttlefish.cfctl.text"
+    if use_helper and not device.shell("pm", "list", "instrumentation", helper):
+        raise RuntimeError("Unicode 输入需要先在所选设备安装 android/text/build.sh 生成的 text.apk")
+    if node.get("focused") != "true":
+        tap_node(device, node)
     selected = matching_nodes(device, key, value)
     while len(selected) != 1 or selected[0]["focused"] != "true":
         if time.monotonic() + 1 >= device.deadline:
             raise TimeoutError("目标输入框未获得焦点")
         time.sleep(0.2)
         selected = matching_nodes(device, key, value)
-    device.shell("input", "keycombination", "KEYCODE_CTRL_LEFT", "KEYCODE_A")
-    device.shell("input", "keyevent", "KEYCODE_DEL")
-    if text:
-        device.shell("input", "text", text.replace(" ", "%s"))
+    identity = ("class", "package", "resource-id", "content-desc", "password")
+    if any(selected[0].get(k) != node.get(k) for k in identity):
+        raise RuntimeError("目标输入框已改变")
+    if use_helper:
+        encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        output = device.shell("am", "instrument", "-w", "-r", "-e", "pkg", node["package"],
+                              "-e", "key", key, "-e", "selector", value, "-e", "value", encoded,
+                              f"{helper}/.SetText")
+        if not {"INSTRUMENTATION_RESULT: cfctl=ok", "INSTRUMENTATION_CODE: -1"}.issubset(output.splitlines()):
+            raise RuntimeError(f"Unicode 输入失败：{output}")
+    else:
+        device.shell("input", "keycombination", "KEYCODE_CTRL_LEFT", "KEYCODE_A")
+        device.shell("input", "keyevent", "KEYCODE_DEL")
+        if text:
+            device.shell("input", "text", text.replace(" ", "%s"))
     selected = matching_nodes(device, key, value)
-    if len(selected) != 1 or selected[0].get("text") != text:
+    if (len(selected) != 1 or selected[0].get("text") != text
+            or any(selected[0].get(k) != node.get(k) for k in identity)):
         raise RuntimeError("输入框的实际文本与请求不符")
     return selected
 
@@ -189,7 +207,8 @@ def ui(device, args):
     if args.action == "tree":
         return ET.tostring(device.tree(), encoding="unicode")
     key, value = next((k, v) for k, v in (("resource-id", args.id), ("text", args.text),
-                                           ("content-desc", args.desc)) if v is not None)
+                                           ("content-desc", args.desc),
+                                           ("focused", "true" if getattr(args, "focused", False) else None)) if v is not None)
     while True:
         try:
             matches = matching_nodes(device, key, value)
@@ -464,6 +483,8 @@ def parser():
         selection = selectors[cmd].add_mutually_exclusive_group(required=True)
         for flag in ("--id", "--text", "--desc"):
             selection.add_argument(flag)
+        if cmd == "set-text":
+            selection.add_argument("--focused", action="store_true")
     groups.add_parser("logs").add_argument("--lines", type=int, default=100)
     groups.add_parser("shell").add_argument("command", nargs=argparse.REMAINDER)
     groups.add_parser("doctor")

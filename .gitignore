@@ -224,3 +224,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# User-supplied application packages for local verification.
+/apks/*.apk

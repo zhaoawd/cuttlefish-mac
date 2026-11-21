@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,44 @@ ROOT = Path(cfctl.__file__).parent
 
 
 class RoutingTests(unittest.TestCase):
+    def test_set_text_refuses_password_and_ambiguous_focus(self):
+        device = cfctl.Device("original", 5)
+        args = cfctl.parser().parse_args(["ui", "set-text", "--focused", "北京"])
+        password = {"class": "android.widget.EditText", "password": "true", "focused": "true"}
+        with patch.object(device, "shell") as shell:
+            with patch.object(cfctl, "matching_nodes", return_value=[password]):
+                with self.assertRaisesRegex(ValueError, "普通 EditText"):
+                    cfctl.ui(device, args)
+            with patch.object(cfctl, "matching_nodes", return_value=[password, password]):
+                with self.assertRaisesRegex(RuntimeError, "多个控件"):
+                    cfctl.ui(device, args)
+            shell.assert_not_called()
+
+    def test_unicode_missing_helper_preserves_existing_text(self):
+        device = cfctl.Device("original", 5)
+        node = {"class": "android.widget.EditText", "text": "existing"}
+        with patch.object(device, "shell", return_value="") as shell:
+            with self.assertRaisesRegex(RuntimeError, "text.apk"):
+                cfctl.replace_text(device, node, "content-desc", "Field", "北京🙂")
+            shell.assert_called_once_with("pm", "list", "instrumentation", "dev.cuttlefish.cfctl.text")
+
+    def test_unicode_selector_and_value_reach_instrumentation(self):
+        text = "北京 A座 302🙂"
+        device = cfctl.Device("original", 5)
+        for key in ("resource-id", "content-desc"):
+            with self.subTest(key=key):
+                node = {"class": "android.widget.EditText", "focused": "true",
+                        "package": PACKAGE, key: "field", "text": "initial"}
+                updated = dict(node, text=text)
+                with patch.object(cfctl, "matching_nodes", side_effect=[[node], [updated]]), \
+                        patch.object(device, "shell", side_effect=[
+                            "instrumentation:dev.cuttlefish.cfctl.text/.SetText",
+                            "INSTRUMENTATION_RESULT: cfctl=ok\nINSTRUMENTATION_CODE: -1"]) as shell:
+                    self.assertEqual(cfctl.replace_text(device, node, key, "field", text), [updated])
+                    shell.assert_called_with("am", "instrument", "-w", "-r", "-e", "pkg", PACKAGE,
+                                             "-e", "key", key, "-e", "selector", "field", "-e", "value",
+                                             base64.b64encode(text.encode()).decode(), "dev.cuttlefish.cfctl.text/.SetText")
+
     def test_wait_retries_until_tree_is_available(self):
         device = cfctl.Device("original", 5)
         args = cfctl.parser().parse_args(["ui", "wait", "--text", "READY"])

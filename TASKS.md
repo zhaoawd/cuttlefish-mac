@@ -44,3 +44,9 @@
 - [x] 在独立 Linux 运行目录复验嵌套 KVM 首次启动。使用 2 MiB hugetlbfs 映射 3072 MiB 来宾 RAM 后，同一 CI 镜像完成首启、六项应用回归和正常关机。仓库 CLI 重启后连续三轮对照通过，报告在 `.local-cf/residual/kvm-release*.json`。
 - [x] 添加 macOS/Linux 离线测试工作流，并在两种宿主本地运行同一测试命令。Mac 启用各项实机条件后的 22 项回归全部通过，记录位于 `.local-cf/residual/macos-full.log`。
 - [ ] 远端 CI 运行和硬件端到端任务调度尚未验收。当前提交仅保留在本地。
+
+## 真实 APK 与 Unicode 输入
+
+- [x] 用 v2rayNG 2.3.14 的本地配置搜索框验证按焦点选择 EditText、输入中文及 emoji、替换、清空、拒绝非输入控件，并检查返回应用首页后的状态。
+- [x] Darwin/HVF 实测通过，测试前后 original 和 recovered 的应用列表及前台窗口一致。首次使用系统返回键的失败记录包含控件树、截图和 logcat。最终流程使用应用内返回按钮并检查所属包名。
+- [x] Linux ARM64/KVM 完成相同场景，QMP 报告 KVM 已启用。两端应用 APK 与输入组件的 SHA-256、Android 构建指纹及搜索断言一致，均已卸载测试包。cf-tcg 的应用列表摘要和前台窗口复核一致。两端报告分别位于 `.local-cf/real-app/darwin-release/result.json` 和 `.local-cf/real-app/linux-release/result.json`。

@@ -56,11 +56,39 @@ python3 -B cfctl.py --device original screen capture result.png
 | `input tap X Y`、`input swipe X1 Y1 X2 Y2`、`input key KEYCODE_BACK` | 坐标以 Android 截图像素为单位。 |
 | `input text 'hello world'` | 向当前焦点输入文本，字符支持范围取决于 Android 的 `input text`。 |
 | `ui find`、`ui wait`、`ui click` | 按 `--id`、`--text` 或 `--desc` 精确匹配 UI Automator 节点。点击要求唯一匹配。 |
-| `ui set-text --desc 'Fixture input' 'hello world'` | 替换普通 EditText 的内容并读回验证。支持英文字母、数字、空格及 `._@+-`。 |
+| `ui set-text --desc 'Fixture input' 'hello world'` | 用 `--id`、`--desc` 或 `--focused` 替换普通 EditText 的内容，并逐字读回。中文和 emoji 需要下文的输入组件。 |
 | `shell pm list packages -3`、`logs --lines 100` | 运行单条来宾命令或读取最近日志。 |
 | `doctor` | 报告磁盘可用空间、ADB 和串口回显，查询新启动实例的 QMP 运行状态和块设备。原有进程继续运行时，缺少该接口会显示 `"qmp": null`。 |
 
 全局参数放在子命令前，例如 `python3 -B cfctl.py --json --timeout 60 --device original device wait`。JSON 返回 `ok` 和 `result` 或 `error`，操作失败返回非零退出码。应用安装保留 Android 返回的签名或版本错误。
+
+### Unicode 输入与 v2rayNG 离线回归
+
+在带 Android SDK 和 JDK 的宿主构建一次输入组件，并安装到需要输入中文的实例。可将同一份 `text.apk` 复制到 Linux 节点。构建默认使用 Build Tools 36.1.0 和 android-36.1，签名密钥保存在构建目录。下面的输入命令用于已打开且获得焦点的普通搜索框。
+
+```sh
+bash android/text/build.sh
+python3 -B cfctl.py --device darwin-1 app install .local-cf/text-helper/text.apk
+python3 -B cfctl.py --device darwin-1 ui set-text --focused '北京 A座 302🙂'
+```
+
+包含中文、emoji 或其他键盘映射范围外字符时，组件通过 Android 的 `ACTION_SET_TEXT` 替换文本，CLI 随后从控件树读取实际值进行核对。英文、数字、空格和 `._@+-` 沿用原输入方式。命令要求唯一匹配，拒绝密码框。自绘控件和 WebView 的可编辑性取决于应用公开的辅助功能节点。
+
+实机回归使用英文 Android 16 测试实例和用户提供的 v2rayNG 2.3.14。脚本先校验 APK 的 SHA-256。目标实例须已启动，且尚未安装 v2rayNG 和输入组件。脚本自行安装并在结束时卸载两者。它打开配置搜索、写入并替换中文、清空搜索框，再返回应用首页核对断开连接状态。每次使用新的输出目录。
+
+```sh
+python3 -B tests/real_app.py run --device darwin-1 \
+  --apk apks/v2rayNG_2.3.14_universal.apk --helper .local-cf/text-helper/text.apk \
+  --observe original --observe recovered --out .local-cf/real-app/darwin
+```
+
+Linux 节点使用同一条 `run` 命令，将设备改为 `linux-1`，传入节点上相同的两个 APK 和输出目录，并省略 Mac 专属的两个 `--observe` 参数。Linux 回归通过 QMP 检查 KVM 是否启用。将两端的结果放到同一宿主后，可用以下命令比较。
+
+```sh
+python3 -B tests/real_app.py compare .local-cf/real-app/darwin/result.json .local-cf/real-app/linux/result.json
+```
+
+每端输出 `result.json` 和输入后的 `search.png`。场景失败时，脚本另行采集 `failure.xml`、`failure.png` 和最近 160 条 logcat 记录。报告记录采集错误及测试包的卸载结果。
 
 双实例回归需要两个已就绪的直启实例、Android SDK 和 JDK。默认使用 Build Tools 36.1.0 和 android-36.1，可用 `ANDROID_HOME`、`CF_BUILD_TOOLS`、`CF_PLATFORM` 和 `JAVA_HOME` 指定。测试会在临时目录生成并签名测试 APK，安装到 original 后清理，核对 recovered 的应用列表和前台窗口。运行命令为 `CF_TEST_CLI=1 python3 -B -m unittest discover -s tests -p test_cli.py -v`。
 
