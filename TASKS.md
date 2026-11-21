@@ -58,7 +58,13 @@
 - [x] 两端实测同一份测试 APK 的深度缓冲渲染、AudioTrack 静音播放、Camera2 一帧 YUV、Wi-Fi 与蓝牙状态切换恢复、模拟 SIM 注册。两端报告位于 `.local-cf/local-acceptance/job-{darwin,linux}/platform/result.json`。
 - [x] 无磁盘 Recovery 在 Darwin/HVF 和 Linux/KVM 通过 ADB 核验。配套 U-Boot 在两端均通过 Fastboot/UDP 只读查询 `is-userspace: no`。独立测试日志位于 `.local-cf/local-acceptance/*-fastboot-release.log`。
 - [x] 串行硬件入口在两端完成启动、真实应用回归、设备检查和正常关机。两端报告经本地比较通过；actionlint 检查两份工作流通过。Mac 全量 unittest 的 26 项零跳过，新增的第 27 项 Fastboot 在同机单独通过。
-- [ ] Fastboot/TCP 在 Darwin 无磁盘 U-Boot 的回环转发上未完成握手，原因未查明。Recovery 的普通 ADB shell 无权设置 fastbootd 的传输属性；用户空间 fastbootd 仍待端到端验证。
-- [ ] OTA 更新和回退缺少本次构建可用的签名 OTA 包。当前 Darwin Cuttlefish 的 QEMU 宿主端尚未实现运行中整机快照所需的暂停路径。
+- [x] U-Boot 设置 `serverip=10.0.2.2` 后，Darwin/HVF 与 Linux/KVM 均在 SLIRP 回环转发上通过 Fastboot/TCP 和 UDP 查询。Linux 独立 TAP 的 IPv4、IPv6 TCP 也通过。原厂 Recovery 从临时 misc 分区读取 `boot-fastboot` 后，在两端返回 `is-userspace: yes`。
+- [ ] Darwin Cuttlefish 的运行中整机快照尚不支持。宿主挂起路径要求 crosvm，正在运行的实例 2 的 QMP `query-migrate` 报告 virtio-sound、vhost-user-vsock、vhost-user-input 不可迁移，两个后端缺少 LOG_SHMFD。证据在 `.local-cf/radio-acceptance/qmp-migration.json`。
 - [x] Darwin/HVF 与本机 Linux/KVM 在 VirtWifi 上完成本地 TCP 双向收发。APK 使用 Wi-Fi Network，双方校验独立的 64 字节随机数据并核对 wlan0 源地址。每端恢复原有 Wi-Fi 开关、关联状态和已保存网络列表。正式报告位于 `.local-cf/wifi-data/job-{darwin,linux}/platform/result.json`。Linux 验收显式选择 virt_wifi，原有 mac80211_hwsim 模式仍用于常规启动。
-- [ ] 蓝牙配对与数据交换、模拟通话和蜂窝数据尚未做端到端验收。Wi-Fi 性能与外部网络访问未测。
+- [x] 修复 Darwin 宿主的 RIL 默认地址被空值覆盖的问题。修复前来宾蜂窝 IPv4 为 `255.255.255.255/31`；修复后为 `10.0.2.15/24`，Linux TAP 来宾为 `192.168.97.2/30`。两端分别通过明确绑定蜂窝 Network 的双向 TCP 校验。
+- [x] 两端使用本地调制解调器控制套接字发起模拟来电。来宾经历空闲、振铃、摘机和空闲，模拟对端收到 Android 接听响应。语音媒体质量未测。
+- [x] 两端通过系统设置与临时 Bumble 对端配对，在要求加密的 GATT 特征上写入并读回 16 个随机字节，随后取消配对。Wi-Fi 通过 1 MiB 双向逐字节校验、耗时采样和公网 HTTPS 204 检查。两端十项能力报告位于 `.local-cf/radio-acceptance/{darwin,linux}-verified/result.json`。
+- [x] 更新串行硬件任务，比较九项离线设备检查、真实 APK、隔离和正常关机。报告位于 `.local-cf/radio-acceptance/job-{darwin,linux}/`。
+- [x] 在独立 Darwin/HVF 和 Linux/KVM 实例 2 实测官方 14781626 → 14818820 A/B 更新、重启前取消更新、从 B 槽启动和快照合并。合并后普通 14781626 包返回 `kPayloadTimestampError (51)`，活动槽保持 B。两端报告位于 `.local-cf/radio-acceptance/ota-official-release/` 和 `.local-cf/radio-acceptance/linux-ota/`。
+- [x] Darwin 冷恢复后实际启动 14781626 A 槽，更新前写入的测试标记一致。Linux 在 14818820 B 槽的冷恢复测试中撤销了关机前对标记的修改。两个流程均保留了恢复前的写入层。
+- [x] macOS 完整实机套件运行 30 项，全部通过。随后增加的第 31 项离线回归复现默认 netsim.ini 指向旧进程的情况，验证按启动器记录选择端点、拒绝其他来宾。新版离线套件 22 项通过，9 项按硬件条件跳过。

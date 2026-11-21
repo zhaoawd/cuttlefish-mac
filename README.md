@@ -192,7 +192,7 @@ start adbd
 
 该命令创建一台暂停的 ARM64 虚拟机，查询 QMP 状态后退出。成功时输出含有 `"status": "prelaunch"`。
 
-本机的 Darwin 宿主包位于 `.local-cf/aosp-volume/aosp/out/host/darwin-x86/cvd-host_package.tar.gz`。`cf.sh` 默认复用 AOSP 卷外的 `.local-cf/run-darwin/`，可用 `CF_RUN` 指定其他目录。
+本地无线验收使用包含 RIL 修复的 `.local-cf/radio-acceptance/cvd-host_package.tar.gz`。原始 Darwin 宿主包位于 `.local-cf/aosp-volume/aosp/out/host/darwin-x86/cvd-host_package.tar.gz`。`cf.sh` 默认复用 AOSP 卷外的 `.local-cf/run-darwin/`，可用 `CF_RUN` 指定其他目录。
 
 首次启动需将 Darwin 宿主包和 ARM64 设备 ZIP 解压到同一个空目录。本次使用默认镜像参数时，首次启动实际占用约 24 GiB，主要来自磁盘组装时分配的区块。复用已有实例时可直接执行启动命令。
 
@@ -254,6 +254,7 @@ repo sync -c -j6 --no-tags --fail-fast &&
 git -C build/soong apply "$PROJECT_ROOT/patches/darwin-local-sdk.patch"
 git -C device/google/cuttlefish apply "$PROJECT_ROOT/patches/darwin-guest-renderer.patch"
 git -C device/google/cuttlefish apply "$PROJECT_ROOT/patches/darwin-keyboard-listener.patch"
+git -C device/google/cuttlefish apply "$PROJECT_ROOT/patches/darwin-ril-fallback.patch"
 git -C external/swiftshader apply "$PROJECT_ROOT/patches/darwin-llvm-config.patch"
 export PATH="/opt/homebrew/opt/gnu-tar/libexec/gnubin:$PATH"
 export CLANG_DEFAULT_DEBUG_LEVEL=debug_level_0
@@ -381,25 +382,59 @@ python3 -B tests/host_acceptance.py --fixture .local-cf/media-fixture/v1.apk \
 | 音频 | 向 AudioTrack 写入 16000 帧静音 PCM，播放游标到达第 16000 帧 | Android 播放路径 |
 | 相机 | 使用 Camera2 从相机 0 获取一帧 160 × 120 的 YUV 图像 | Android 来宾相机 |
 | Wi-Fi、蓝牙 | 切换适配器状态并恢复初始值 | 两端的适配器状态读回 |
-| Wi-Fi 数据 | 关联开放的虚拟 AP `VirtWifi`，在 `wlan0` 上向宿主发送 64 字节请求并逐字节核对 64 字节响应 | Android 应用到本地宿主的 TCP 双向传输，使用 QEMU SLIRP 网卡 |
-| 蜂窝网络 | 模拟 SIM 为 `LOADED`，语音和数据均注册为 `IN_SERVICE` | 注册状态；实际通话和数据传输待验收 |
-| Fastboot | 在独立、无磁盘的配套 U-Boot 上，用 Fastboot/UDP 读取 `is-userspace: no` | 单独运行 `test_fastboot.py`；刷写、解锁及 fastbootd 均在此用例范围之外 |
+| Wi-Fi 数据 | 关联 VirtWifi，绑定 wlan0 收发随机数据，逐字节核对 1 MiB 下载和回传，并记录两个方向的耗时 | Android 应用与本地宿主之间的 TCP |
+| 蜂窝网络 | 核对 SIM 注册，使用 Android 蜂窝 Network 向宿主网关收发数据并核对源地址 | 专用实例的 buried_eth0 与模拟调制解调器 |
+| 模拟来电 | 用本地 modem_simulator 产生来电，Android 接听，模拟对端收到接听响应后挂断 | 验证空闲、振铃、摘机、空闲四个状态，语音媒体流另计 |
+| 蓝牙 LE | 在系统设置与 Bumble 对端配对，加密 GATT 特征写入并读回 16 个随机字节，取消配对 | 可选独立回归 |
+| Wi-Fi 公网访问 | 绑定 wlan0，向 Android 连通性检查端点发起 HTTPS 请求并验证状态码 204 | 可选独立回归 |
 
 构建 14781626 的来宾 init 读取 `ro.boot.wifi_impl` 来启动 `setup_wifi`。Darwin 原配置提供了 `ro.boot.vendor.wifi_impl`，HAL 日志报告 `wlan0 (No such device)`。`cf.sh start` 现在同时传入 `androidboot.wifi_impl=virt_wifi`。重启后出现 `wlan0`，回归可重复启用和恢复 Wi-Fi。
 
 硬件任务在 Linux/KVM 启动专用实例时启用 `CF_KVM_VIRT_WIFI=1`。该配置给来宾设置 `androidboot.wifi_impl=virt_wifi`，使用第三张 SLIRP 网卡提供 `VirtWifi`。普通 `device start` 仍使用原来的无线后端。单独复跑时，在实例已停止的情况下执行 `CF_KVM_VIRT_WIFI=1 python3 -B cfctl.py --device linux-1 device start`，然后执行 `python3 -B tests/platform_probe.py --device linux-1 --apk "$CF_FIXTURE_APK" --out "$OUT" --wifi-data`。Darwin 将设备名改为 `darwin-1`，使用现有的 SLIRP 启动配置。测试 APK 须从当前 `tests/apk` 重新构建，两端使用同一个文件。
 
-收发测试在宿主的 `127.0.0.1` 随机端口监听，来宾通过 SLIRP 网关 `10.0.2.2` 访问。测试应用使用 Android Wi-Fi Network 的 SocketFactory，核对套接字源地址与 `wlan0` 的 IPv4 地址。测试结束时清理本次新增的网络配置，并核对已保存网络列表、关联状态和 Wi-Fi 开关。结果位于 `platform/result.json` 的 `checks.wifi_data`。该用例覆盖本地连通性，未测吞吐、物理 AP 或公网访问。
+Darwin 上，旧版 `assemble_cvd` 找不到移动网桥和 TAP 后，使用空值覆盖了 RIL 回退地址。应用 `darwin-ril-fallback.patch` 并重新构建宿主包后，模拟调制解调器向来宾提供 `10.0.2.15/24`。Linux 实例 1 的蜂窝地址为 `192.168.97.2/30`。测试 APK 分别绑定 Android Wi-Fi 和蜂窝 Network 的 SocketFactory，核对出口网卡和实际源地址。Wi-Fi 结束时核对已保存网络、关联和开关；吞吐采样的字节数和纳秒数保存在 `checks.wifi_data`。
 
-Linux 的 Recovery 和 Fastboot 可独立复验。前者只使用内核与 ramdisk，后者只使用 U-Boot；两者均无需挂载 Android 用户盘。Darwin 独立 U-Boot 的 Fastboot/TCP 试验中，来宾显示监听并回复 ARP，请求未完成 TCP 握手，原因未查明。Linux 的 `CF_TEST_WORKDIR` 须可写，`QEMU_BINARY_DIR` 指向宿主包内的 QEMU。
+两个无线扩展用例可以在已启动的英文专用实例上运行。先在宿主的独立 Python 环境安装 `bumble[android]==0.0.236`。用运行目录启动临时对端。脚本从启动器日志读取实际连接的 netsimd 实例号，通过相应的 INI 文件找到 gRPC 端口，并核对设备列表。已配置本机 SSH 转发时可用 `--port` 指定转发端口。程序打印本次测试对端的地址。在第二个终端运行检查，检查结束后在第一个终端按 Ctrl-C 关闭对端。Linux 使用 `linux-1` 和该节点的 APK 路径。
+
+```sh
+python -B tests/ble_peer.py --run "$CF_RUN"
+python3 -B tests/platform_probe.py --device darwin-1 --apk "$CF_FIXTURE_APK" \
+  --wifi-internet --cellular --ble-address "$PEER_ADDRESS" --out "$NEW_REPORT_DIR"
+python3 -B tests/compare_hardware.py --platform-only "$DARWIN_REPORT/result.json" "$LINUX_REPORT/result.json"
+```
+
+在 Linux/KVM 测试节点启用 `CF_KVM_VIRT_WIFI=1` 后再启动 Android，可使用同一组无线检查。默认离线硬件任务验证本地收发；扩展用例访问 `https://connectivitycheck.gstatic.com/generate_204`，记录 HTTPS 结果。模拟蓝牙接入当前实例的 gRPC 端点，配对不会启用联系人共享。
+
+U-Boot 和 Recovery 在 Darwin/HVF 与 Linux/KVM 上分别返回 `is-userspace: no` 和 `is-userspace: yes`。无盘 U-Boot 的 UDP、TCP 回归均显式设置 `ipaddr=10.0.2.15` 和 `serverip=10.0.2.2`。Recovery 的 TCP 回归从临时 GPT 的 `misc` 分区读取 `boot-fastboot`，由原厂 Recovery 进入 fastbootd；第二块虚拟网卡 eth1 使用回环端口转发。Linux 的 `CF_TEST_WORKDIR` 须可写。
 
 ```sh
 export QEMU_BINARY_DIR="$CF_RUN/bin/aarch64-linux-gnu/qemu"
-CF_TEST_WORKDIR="$HOME" GUEST_ZIP="$GUEST_ZIP" UNPACK_BOOTIMG="$CF_RUN/bin/unpack_bootimg.py" \
+CF_TEST_FASTBOOT=1 CF_TEST_WORKDIR="$HOME" GUEST_ZIP="$GUEST_ZIP" UNPACK_BOOTIMG="$CF_RUN/bin/unpack_bootimg.py" \
   python3 -B -m unittest discover -s tests -p test_recovery.py -v
 CF_TEST_FASTBOOT=1 python3 -B -m unittest discover -s tests -p test_fastboot.py -v
 ```
 
-手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、七项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
+手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、九项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
 
-当前设备 ZIP 包含 11 个镜像与说明文件。本地验收输入中没有与目标构建匹配的签名 OTA 包。运行中整机快照也有宿主端限制：本次 Darwin 所用 Cuttlefish 源码的 `ServerLoopImpl::SuspendGuest` 仅处理 crosvm，选择 QEMU 时返回不支持。已验收的快照能力为关机后的直启实例磁盘保存和恢复。
+### A/B OTA 与回退
+
+`tests/ota_acceptance.py` 在独立运行目录的 Cuttlefish 实例 2、回环 ADB 端口 6521 上运行。使用单独解包的宿主包和设备镜像启动该实例，两端均可使用相同脚本。测试校验运行目录、来宾序列号、产品、OTA 类型及完整 ZIP 的 SHA-256。在 Darwin 将修复后的宿主包和 14781626 设备 ZIP 解包到同一个新目录；Linux 使用对应的 ARM64 宿主包。在本机嵌套 KVM 节点沿用前文的 `CF_KVM_HUGETLBFS`。以下命令使用不同的报告目录。两个官方 OTA 均为该产品的完整 A/B 更新包。[14781626 OTA](https://ci.android.com/builds/submitted/14781626/aosp_cf_arm64_only_phone-userdebug/latest/raw/aosp_cf_arm64_only_phone-ota-14781626.zip) · [14818820 OTA](https://ci.android.com/builds/submitted/14818820/aosp_cf_arm64_only_phone-userdebug/latest/raw/aosp_cf_arm64_only_phone-ota-14818820.zip)
+
+```sh
+bash tests/ota_host.sh start "$OTA_CVD_RUN"
+python3 -B tests/ota_acceptance.py --run "$OTA_CVD_RUN" --ota "$OTA_14818820" --out "$UPGRADE_REPORT"
+python3 -B tests/ota_acceptance.py --run "$OTA_CVD_RUN" --ota "$OTA_14781626" --out "$DOWNGRADE_REPORT"
+bash tests/ota_host.sh stop "$OTA_CVD_RUN"
+```
+
+升级用例从 14781626 的 A 槽开始。它先应用新包，确认下次启动槽为 B，再用 `--reset_status` 恢复 A。第二次应用后重启，核对新指纹、实际槽位和 Virtual A/B 合并状态。旧包用例验证 Android 对普通旧版 OTA 的处理，`downgrade_rejected` 表示更新引擎返回 `kPayloadTimestampError` 且保留当前启动槽。
+
+Darwin 运行中整机快照仍受宿主和设备模型限制。当前 Cuttlefish 的挂起路径要求 crosvm。专用 QEMU 实例的 `query-migrate` 还报告 virtio-sound、vhost-user-vsock 和 vhost-user-input 不可迁移，两个后端缺少 `VHOST_USER_PROTOCOL_F_LOG_SHMFD`。磁盘冷备份需要先正常关闭来宾和宿主。
+
+在 Darwin 专用实例上复验磁盘冷恢复时，先在 A 槽写入测试标记，正常关闭 Android，等待 kernel.log 出现 `reboot: Power down`，然后对实例 2 执行 `stop_cvd` 并确认 6521 已关闭。在同一 APFS 卷用 `cp -cp` 复制 `cuttlefish_runtime.2` 下的 `overlay.img`、`persistent_composite_overlay.img` 和 `sdcard_overlay.img`。保留原运行目录与基盘路径。完成升级和合并后再次正常关机，将升级后的三个写入层移到另一个空目录，再将同一次冷备份的三个文件复制回原路径。启动后同时核对 `sys.boot_completed`、构建指纹、槽位与测试标记。
+
+停机的专用实例也可使用以下冷恢复回归。脚本创建随机标记，保留恢复前后的写入层，验证恢复后的指纹、槽位和标记，并正常关机。备份目录须位于运行目录所在的文件系统。要在升级前后验证旧版本恢复，从 14781626 初态启动此回归，并追加 `--ota "$OTA_14818820"`。
+
+```sh
+python3 -B tests/ota_cold_restore.py --run "$OTA_CVD_RUN" --out "$NEW_CHECKPOINT_DIR"
+```

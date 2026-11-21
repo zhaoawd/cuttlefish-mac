@@ -19,7 +19,7 @@ def run(args):
     require(not any(before[key] for key in ("qemu", "host_running", "owns_port", "conflict")),
             f"{NAME} 需要已停止且无端口冲突")
     args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
-    result = {"device": NAME, "ok": False, "wifi_data": True}
+    result = {"device": NAME, "ok": False, "wifi_data": True, "cellular_data": True}
     try:
         result["start"] = guest(NAME, "device", "start")
         common = ["--device", NAME]
@@ -28,7 +28,7 @@ def run(args):
         observers = ["--observe", "original", "--observe", "recovered"] if NAME == "darwin-1" else []
         test("real_app.py", "run", *common, "--apk", args.apk, "--helper", args.helper,
              "--out", args.out / "app", *observers)
-        test("platform_probe.py", "--wifi-data", *common, "--apk", args.fixture, "--out", args.out / "platform")
+        test("platform_probe.py", "--wifi-data", "--cellular", *common, "--apk", args.fixture, "--out", args.out / "platform")
         result["checks_passed"] = True
     finally:
         try:

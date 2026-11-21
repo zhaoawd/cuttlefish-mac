@@ -20,6 +20,42 @@ def local_port():
 
 @unittest.skipUnless(os.environ.get("GUEST_ZIP"), "需要 Android 16 ARM64 设备 ZIP")
 class RecoveryTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("CF_TEST_FASTBOOT") == "1", "需要 fastboot 客户端")
+    def test_userspace_fastboot(self):
+        archive = Path(os.environ["GUEST_ZIP"]).resolve()
+        port = local_port()
+        cmd = [sys.executable, "-B", str(ROOT / "recovery.py"), str(archive), "--fastboot-port", str(port)]
+        if os.environ.get("UNPACK_BOOTIMG"):
+            cmd.extend(["--unpack-bootimg", os.environ["UNPACK_BOOTIMG"]])
+        with tempfile.TemporaryDirectory(dir=os.environ.get("CF_TEST_WORKDIR", archive.parent)) as tmp:
+            log = Path(tmp) / "fastbootd.log"
+            with log.open("wb") as output, subprocess.Popen(
+                    [*cmd, "--work-dir", tmp], stdin=subprocess.PIPE, stdout=output, stderr=output) as vm:
+                try:
+                    deadline = time.monotonic() + 120
+                    while b"started service 'console'" not in log.read_bytes():
+                        if vm.poll() is not None or time.monotonic() >= deadline:
+                            self.fail(log.read_text(errors="replace")[-2000:])
+                        time.sleep(0.25)
+                    vm.stdin.write(b"\nifconfig eth1 10.0.2.15 netmask 255.255.255.0 up\n")
+                    vm.stdin.flush()
+                    while time.monotonic() < deadline:
+                        try:
+                            result = subprocess.run(["fastboot", "-s", f"tcp:127.0.0.1:{port}",
+                                                     "getvar", "is-userspace"], timeout=4,
+                                                    capture_output=True, text=True)
+                            if result.returncode == 0 and "is-userspace: yes" in result.stderr + result.stdout:
+                                return
+                        except subprocess.TimeoutExpired:
+                            pass
+                        time.sleep(0.3)
+                    self.fail(log.read_text(errors="replace")[-2000:])
+                finally:
+                    if vm.poll() is None:
+                        vm.stdin.write(b"\x01x")
+                        vm.stdin.flush()
+                        vm.wait(timeout=15)
+
     def test_recovery_over_adb(self):
         archive = Path(os.environ["GUEST_ZIP"]).resolve()
         adb = shutil.which("adb")

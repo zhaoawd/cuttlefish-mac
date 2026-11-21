@@ -20,31 +20,46 @@ def wait_for(read, message, timeout=25):
     raise RuntimeError(message)
 
 
-def exchange(media):
+def exchange(media, *, cellular=False, bind="127.0.0.1", gateway="10.0.2.2"):
+    bulk = b"" if cellular else secrets.token_bytes(1024 * 1024)
+    timing = {}
     request = secrets.token_hex(32)
     reply = secrets.token_hex(32)
     with socket.socket() as server:
-        server.bind(("127.0.0.1", 0))
+        server.bind((bind, 0))
         server.listen(1)
         server.settimeout(15)
 
         def serve():
             conn, _ = server.accept()
             with conn, conn.makefile("rb") as stream:
-                conn.settimeout(6)
-                require(stream.read(len(request)) == request.encode("ascii"), "宿主收到的 Wi-Fi 请求不符")
+                conn.settimeout(10)
+                require(stream.read(len(request)) == request.encode("ascii"), "宿主收到的请求不符")
                 conn.sendall(reply.encode("ascii"))
+                if bulk:
+                    require(stream.read(1) == b"\x01", "缺少下载就绪响应")
+                    start = time.monotonic_ns()
+                    conn.sendall(bulk)
+                    require(stream.read(1) == b"\x01", "来宾未确认收齐数据")
+                    timing["download_ns"] = time.monotonic_ns() - start
+                    start = time.monotonic_ns()
+                    conn.sendall(b"\x01")
+                    require(stream.read(len(bulk)) == bulk, "回传数据不一致")
+                    timing.update(upload_ns=time.monotonic_ns() - start, bytes_per_direction=len(bulk))
+                    conn.sendall(b"\x01")
 
         with ThreadPoolExecutor(max_workers=1) as worker:
             received = worker.submit(serve)
-            ip = media("wifi-data", "-e", "port", str(server.getsockname()[1]), "-e", "request", request,
+            evidence = media("cellular-data" if cellular else "wifi-data", "-e", "gateway", gateway,
+                       "-e", "bytes", str(len(bulk)), "-e", "port", str(server.getsockname()[1]), "-e", "request", request,
                        "-e", "reply", reply)
             received.result()
-    return {"guest_ipv4": ip, "interface": "wlan0", "gateway": "10.0.2.2",
+    iface, ip = evidence.split()
+    return {**timing, "guest_ipv4": ip, "interface": iface, "gateway": gateway,
             "request_bytes": len(request), "reply_bytes": len(reply)}
 
 
-def verify_wifi(shell, media):
+def verify_wifi(shell, media, internet=False):
     def wifi(*args):
         return shell("cmd", "wifi", *args)
 
@@ -85,6 +100,9 @@ def verify_wifi(shell, media):
         result = exchange(media)
         require(result["guest_ipv4"] == address[1], "TCP 源地址与 wlan0 地址不一致")
         result.update(ssid=SSID, initial_enabled=enabled)
+        if internet:
+            result["https"] = media("wifi-https")
+            require(result["https"] == "wlan0 HTTPS 204", "公网 HTTPS 响应不符")
     finally:
         try:
             if attempted:

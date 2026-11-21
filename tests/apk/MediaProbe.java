@@ -37,7 +37,10 @@ public final class MediaProbe extends Instrumentation {
         try {
             String evidence;
             switch (arguments.getString("test")) {
-                case "wifi-data": evidence = WifiProbe.exchange(getTargetContext(), arguments); break;
+                case "bluetooth-data": evidence = BluetoothProbe.exchange(getTargetContext(), arguments); break;
+                case "wifi-https":
+                case "cellular-data":
+                case "wifi-data": evidence = NetworkProbe.exchange(getTargetContext(), arguments); break;
                 case "gles": evidence = graphics(); break;
                 case "audio": evidence = audio(); break;
                 case "camera": evidence = camera(); break;

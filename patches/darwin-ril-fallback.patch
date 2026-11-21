@@ -1,0 +1,12 @@
+diff --git a/host/commands/assemble_cvd/network_flags.cpp b/host/commands/assemble_cvd/network_flags.cpp
+--- a/host/commands/assemble_cvd/network_flags.cpp
++++ b/host/commands/assemble_cvd/network_flags.cpp
+@@ -144,6 +144,8 @@ Result<void> ConfigureNetworkSettings(
+       instance.set_ril_dns("8.8.8.8");
+       instance.set_ril_gateway("10.0.2.2");
+       instance.set_ril_ipaddr("10.0.2.15");
+       instance.set_ril_prefixlen(24);
++      instance.set_ril_broadcast("10.0.2.255");
++      return {};
+     }
+   }
