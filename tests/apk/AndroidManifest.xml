@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.cuttlefish.cfctl.fixture">
   <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.CAMERA"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
   <instrumentation android:name=".MediaProbe" android:targetPackage="dev.cuttlefish.cfctl.fixture"/>
   <application android:label="CF CLI Test">
     <activity android:name=".Main" android:exported="true">

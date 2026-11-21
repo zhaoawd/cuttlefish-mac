@@ -60,4 +60,5 @@
 - [x] 串行硬件入口在两端完成启动、真实应用回归、设备检查和正常关机。两端报告经本地比较通过；actionlint 检查两份工作流通过。Mac 全量 unittest 的 26 项零跳过，新增的第 27 项 Fastboot 在同机单独通过。
 - [ ] Fastboot/TCP 在 Darwin 无磁盘 U-Boot 的回环转发上未完成握手，原因未查明。Recovery 的普通 ADB shell 无权设置 fastbootd 的传输属性；用户空间 fastbootd 仍待端到端验证。
 - [ ] OTA 更新和回退缺少本次构建可用的签名 OTA 包。当前 Darwin Cuttlefish 的 QEMU 宿主端尚未实现运行中整机快照所需的暂停路径。
-- [ ] Wi-Fi 数据传输、蓝牙配对与数据交换、模拟通话和蜂窝数据尚未做端到端验收。现有虚拟设备测试的范围见 README。
+- [x] Darwin/HVF 与本机 Linux/KVM 在 VirtWifi 上完成本地 TCP 双向收发。APK 使用 Wi-Fi Network，双方校验独立的 64 字节随机数据并核对 wlan0 源地址。每端恢复原有 Wi-Fi 开关、关联状态和已保存网络列表。正式报告位于 `.local-cf/wifi-data/job-{darwin,linux}/platform/result.json`。Linux 验收显式选择 virt_wifi，原有 mac80211_hwsim 模式仍用于常规启动。
+- [ ] 蓝牙配对与数据交换、模拟通话和蜂窝数据尚未做端到端验收。Wi-Fi 性能与外部网络访问未测。

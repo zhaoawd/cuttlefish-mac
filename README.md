@@ -380,11 +380,16 @@ python3 -B tests/host_acceptance.py --fixture .local-cf/media-fixture/v1.apk \
 | 图形 | 向 EGL 离屏表面绘制两层不同深度的三角形，读回中心像素 RGB 为 0、255、0 | 来宾 SwiftShader 软件渲染 |
 | 音频 | 向 AudioTrack 写入 16000 帧静音 PCM，播放游标到达第 16000 帧 | Android 播放路径 |
 | 相机 | 使用 Camera2 从相机 0 获取一帧 160 × 120 的 YUV 图像 | Android 来宾相机 |
-| Wi-Fi、蓝牙 | 切换适配器状态并恢复初始值 | 开关与状态读回；网络吞吐、蓝牙配对及传输待验收 |
+| Wi-Fi、蓝牙 | 切换适配器状态并恢复初始值 | 两端的适配器状态读回 |
+| Wi-Fi 数据 | 关联开放的虚拟 AP `VirtWifi`，在 `wlan0` 上向宿主发送 64 字节请求并逐字节核对 64 字节响应 | Android 应用到本地宿主的 TCP 双向传输，使用 QEMU SLIRP 网卡 |
 | 蜂窝网络 | 模拟 SIM 为 `LOADED`，语音和数据均注册为 `IN_SERVICE` | 注册状态；实际通话和数据传输待验收 |
 | Fastboot | 在独立、无磁盘的配套 U-Boot 上，用 Fastboot/UDP 读取 `is-userspace: no` | 单独运行 `test_fastboot.py`；刷写、解锁及 fastbootd 均在此用例范围之外 |
 
 构建 14781626 的来宾 init 读取 `ro.boot.wifi_impl` 来启动 `setup_wifi`。Darwin 原配置提供了 `ro.boot.vendor.wifi_impl`，HAL 日志报告 `wlan0 (No such device)`。`cf.sh start` 现在同时传入 `androidboot.wifi_impl=virt_wifi`。重启后出现 `wlan0`，回归可重复启用和恢复 Wi-Fi。
+
+硬件任务在 Linux/KVM 启动专用实例时启用 `CF_KVM_VIRT_WIFI=1`。该配置给来宾设置 `androidboot.wifi_impl=virt_wifi`，使用第三张 SLIRP 网卡提供 `VirtWifi`。普通 `device start` 仍使用原来的无线后端。单独复跑时，在实例已停止的情况下执行 `CF_KVM_VIRT_WIFI=1 python3 -B cfctl.py --device linux-1 device start`，然后执行 `python3 -B tests/platform_probe.py --device linux-1 --apk "$CF_FIXTURE_APK" --out "$OUT" --wifi-data`。Darwin 将设备名改为 `darwin-1`，使用现有的 SLIRP 启动配置。测试 APK 须从当前 `tests/apk` 重新构建，两端使用同一个文件。
+
+收发测试在宿主的 `127.0.0.1` 随机端口监听，来宾通过 SLIRP 网关 `10.0.2.2` 访问。测试应用使用 Android Wi-Fi Network 的 SocketFactory，核对套接字源地址与 `wlan0` 的 IPv4 地址。测试结束时清理本次新增的网络配置，并核对已保存网络列表、关联状态和 Wi-Fi 开关。结果位于 `platform/result.json` 的 `checks.wifi_data`。该用例覆盖本地连通性，未测吞吐、物理 AP 或公网访问。
 
 Linux 的 Recovery 和 Fastboot 可独立复验。前者只使用内核与 ramdisk，后者只使用 U-Boot；两者均无需挂载 Android 用户盘。Darwin 独立 U-Boot 的 Fastboot/TCP 试验中，来宾显示监听并回复 ARP，请求未完成 TCP 握手，原因未查明。Linux 的 `CF_TEST_WORKDIR` 须可写，`QEMU_BINARY_DIR` 指向宿主包内的 QEMU。
 
@@ -395,6 +400,6 @@ CF_TEST_WORKDIR="$HOME" GUEST_ZIP="$GUEST_ZIP" UNPACK_BOOTIMG="$CF_RUN/bin/unpac
 CF_TEST_FASTBOOT=1 python3 -B -m unittest discover -s tests -p test_fastboot.py -v
 ```
 
-手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、六项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
+手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、七项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
 
 当前设备 ZIP 包含 11 个镜像与说明文件。本地验收输入中没有与目标构建匹配的签名 OTA 包。运行中整机快照也有宿主端限制：本次 Darwin 所用 Cuttlefish 源码的 `ServerLoopImpl::SuspendGuest` 仅处理 crosvm，选择 QEMU 时返回不支持。已验收的快照能力为关机后的直启实例磁盘保存和恢复。

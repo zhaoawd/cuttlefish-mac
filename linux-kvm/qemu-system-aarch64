@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""保留 Cuttlefish 的 KVM 配置，将来宾 RAM 映射到专用 hugetlbfs。"""
+"""保留 Cuttlefish 的 KVM 配置，可选用大页内存及 virt_wifi 网卡。"""
 import os
 from pathlib import Path
 import sys
 
 args = sys.argv[1:]
 objects = [i + 1 for i, arg in enumerate(args[:-1]) if arg == "-object"]
-if objects:
+if objects and os.environ.get("CF_KVM_HUGETLBFS"):
     ram = [i for i in objects if "id=vm_ram" in args[i].split(",")]
     if len(ram) != 1 or not args[ram[0]].startswith("memory-backend-file,"):
         sys.exit("Cuttlefish 实例须配置一个文件映射的 vm_ram")
@@ -16,5 +16,13 @@ if objects:
         sys.exit("vm_ram 缺少共享内存文件路径")
     options[paths[0]] = "mem-path=" + os.environ["CF_KVM_HUGETLBFS"].replace(",", ",,")
     args[ram[0]] = ",".join(options)
+if "-netdev" in args and os.environ.get("CF_KVM_VIRT_WIFI") == "1":
+    netdevs = [args[i + 1].split(",") for i, arg in enumerate(args[:-1]) if arg == "-netdev"]
+    existing = [opts for opts in netdevs if "id=hostnet2" in opts]
+    if existing and existing != [["user", "id=hostnet2"]]:
+        sys.exit("CF_KVM_VIRT_WIFI 需要专用的 SLIRP hostnet2，已有网卡配置不同")
+    if not existing:
+        args.extend(["-netdev", "user,id=hostnet2",
+                     "-device", "virtio-net-pci-non-transitional,id=net2,netdev=hostnet2,romfile="])
 binary = Path(os.environ["ANDROID_HOST_OUT"]) / "bin/aarch64-linux-gnu/qemu/qemu-system-aarch64"
 os.execv(binary, [str(binary), *args])

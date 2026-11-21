@@ -11,7 +11,7 @@ if [[ -z "${JAVA_HOME:-}" && -d "/Applications/Android Studio.app/Contents/jbr/C
 fi
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}$PATH"
 mkdir -p classes dex
-javac --release 8 -cp "$android" -d classes "$src/Main.java" "$src/MediaProbe.java"
+javac --release 8 -cp "$android" -d classes "$src/Main.java" "$src/MediaProbe.java" "$src/WifiProbe.java"
 "$tools/d8" --min-api 28 --lib "$android" --output dex classes/dev/cuttlefish/cfctl/fixture/*.class
 for key in primary secondary; do
   keytool -genkeypair -alias dev -keystore "$key.p12" -storepass testonly -keypass testonly \

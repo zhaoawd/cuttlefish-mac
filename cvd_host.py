@@ -124,6 +124,9 @@ class CvdHost:
                                "--start_webrtc=true", "--vsock_guest_cid=16",
                                "--cpus=2", "--memory_mb=3072", "--report_anonymous_usage_stats=n"]
                         accel = os.environ.get("CF_LINUX_ACCEL", "kvm")
+                        virt_wifi = os.environ.get("CF_KVM_VIRT_WIFI") == "1"
+                        if virt_wifi and accel != "kvm":
+                            raise ValueError("CF_KVM_VIRT_WIFI 需要 Linux KVM")
                         if accel == "tcg":
                             cmd.append(f"--qemu_binary_dir={ROOT / 'linux-tcg'}")
                             # 同架构的 TCG 也使用 Cuttlefish 为软件模拟提供的超时倍率。
@@ -136,7 +139,10 @@ class CvdHost:
                                 raise ValueError("CF_KVM_HUGETLBFS 需要可写的绝对目录")
                             if d.run(["findmnt", "-n", "-o", "FSTYPE", "-T", pages]) != "hugetlbfs":
                                 raise ValueError("CF_KVM_HUGETLBFS 须位于已挂载的 hugetlbfs")
+                        if accel == "kvm" and (os.environ.get("CF_KVM_HUGETLBFS") or virt_wifi):
                             cmd.append(f"--qemu_binary_dir={ROOT / 'linux-kvm'}")
+                        if virt_wifi:
+                            cmd.append("--extra_bootconfig_args=androidboot.wifi_impl=virt_wifi")
                     # launch_cvd 派生的宿主进程会继承描述符，避免经捕获管道等待 EOF。
                     with (self.run / "cfctl-launch.log").open("ab") as out:
                         proc = subprocess.run(cmd, cwd=self.run, stdin=subprocess.DEVNULL,

@@ -24,11 +24,11 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 public final class MediaProbe extends Instrumentation {
-    private String test;
+    private Bundle arguments;
 
     @Override public void onCreate(Bundle args) {
         super.onCreate(args);
-        test = args.getString("test");
+        arguments = args;
         start();
     }
 
@@ -36,7 +36,8 @@ public final class MediaProbe extends Instrumentation {
         Bundle result = new Bundle();
         try {
             String evidence;
-            switch (test) {
+            switch (arguments.getString("test")) {
+                case "wifi-data": evidence = WifiProbe.exchange(getTargetContext(), arguments); break;
                 case "gles": evidence = graphics(); break;
                 case "audio": evidence = audio(); break;
                 case "camera": evidence = camera(); break;

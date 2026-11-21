@@ -5,6 +5,7 @@ import re
 import sys
 import time
 
+from wifi_data import verify_wifi
 from parity import PACKAGE, ROOT, digest, guest, require, write_json
 
 sys.path.insert(0, str(ROOT))
@@ -22,8 +23,8 @@ def run(args):
     def shell(*argv):
         return cli("shell", *argv)
 
-    def media(test):
-        output = shell("am", "instrument", "-w", "-r", "-e", "test", test, PACKAGE + "/.MediaProbe")
+    def media(test, *extras):
+        output = shell("am", "instrument", "-w", "-r", "-e", "test", test, *extras, PACKAGE + "/.MediaProbe")
         require("INSTRUMENTATION_CODE: -1" in output.splitlines(), output)
         evidence = re.search(r"^INSTRUMENTATION_RESULT: evidence=(.+)$", output, re.M)
         require(evidence is not None, "缺少 instrumentation 结果")
@@ -70,14 +71,17 @@ def run(args):
     args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
     report = dict(device=NAME, fingerprint=shell("getprop", "ro.build.fingerprint"),
                   fixture_sha256=digest(args.apk), checks={}, errors={})
+    probes = [("gles", lambda: media("gles")), ("audio", lambda: media("audio")),
+              ("camera", lambda: media("camera")), ("wifi", lambda: radio("wifi")),
+              ("bluetooth", lambda: radio("bluetooth")), ("cellular", cellular)]
+    if args.wifi_data:
+        probes.append(("wifi_data", lambda: verify_wifi(shell, media)))
     try:
         cli("app", "install", args.apk)
         cli("input", "key", "KEYCODE_WAKEUP")
         shell("wm", "dismiss-keyguard")
         shell("pm", "grant", PACKAGE, "android.permission.CAMERA")
-        for name, probe in (("gles", lambda: media("gles")), ("audio", lambda: media("audio")),
-                            ("camera", lambda: media("camera")), ("wifi", lambda: radio("wifi")),
-                            ("bluetooth", lambda: radio("bluetooth")), ("cellular", cellular)):
+        for name, probe in probes:
             try:
                 report["checks"][name] = probe()
             except Exception as exc:
@@ -90,7 +94,7 @@ def run(args):
             require("package:" + PACKAGE not in cli("app", "list"), "测试包卸载失败")
             report["uninstalled"] = True
         finally:
-            report["ok"] = len(report["checks"]) == 6 and report.get("uninstalled", False)
+            report["ok"] = len(report["checks"]) == len(probes) and report.get("uninstalled", False)
             write_json(args.out / "result.json", report)
     require(report["ok"], str(report["errors"]))
     print(args.out / "result.json")
@@ -101,6 +105,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", required=True)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--wifi-data", action="store_true", help="通过 VirtWifi 收发数据并恢复初态")
     args = parser.parse_args()
     with lock(run_directory() / ".cfctl-control.lock"):
         run(args)
