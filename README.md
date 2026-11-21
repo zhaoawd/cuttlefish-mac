@@ -21,6 +21,8 @@ hdiutil attach "$PWD/.local-cf/aosp.sparsebundle" -mountpoint "$PWD/.local-cf/ao
 
 本实例使用 4 个虚拟 CPU、3072 MiB 内存、720 × 1280 的 virtio-gpu 屏幕、Cocoa 窗口和软件图形渲染。ADB 仅监听 Mac 回环地址。脚本通过 Cuttlefish 的 hvc1 控制台把本机 ADB 公钥加入 userdebug 来宾。设备基础镜像和用户写入层位于 `.local-cf/aosp-volume/phone/`。
 
+新启动的 Cocoa 窗口标题包含 ADB 端口。需要长期运行的自动化实例可在启动前设置 `CF_PHONE_DISPLAY=none`，例如 `CF_PHONE_DISPLAY=none python3 -B cfctl.py --device qa-one device start`。无窗口模式保留虚拟屏幕、ADB 截图、串口和 QMP。显示方式在 QEMU 启动时生效。再次启动同一写入层时，上一次非空串口日志保存在实例目录的 `boot.previous.log`。
+
 这条启动路径直接装载 Android CI 的内核和 ramdisk。启动配置选择 F2FS userdata，并在第二块 GPT 磁盘中提供 FRP 分区。仅有 ADB 所需的本机网络转发。电话调制解调器和 Thread 网络缺少宿主后端，音频、相机与蓝牙未验收。
 
 已有设备可直接使用。要从同一份 CI ZIP 新建设备目录，运行下列命令。准备脚本使用 AOSP 的 `avbtool.py`、`unpack_bootimg.py` 和本机的 `lz4`、`qemu-img`，临时裸盘和最终 QCOW2 会逐字节比较。默认 ADB 端口为 16521。需要同时启动一个独立实例时，用 `CF_ADB_PORT` 为它指定不同的本机端口。
@@ -116,7 +118,11 @@ curl -fsS -H "$auth" "$api/v1/files/qa-one.png" -o qa-one.png
 
 UI 操作超时时，CLI 将控件树和截图保存到独立目录。直启实例的路径在 `.local-cf/artifacts/` 下，Cuttlefish 实例的路径在 `$CF_RUN/artifacts/` 下。每个诊断文件默认最多额外等待 5 秒，Linux TCG 模式为 60 秒。JSON 返回 `artifacts` 和 `capture_errors`。API 返回可通过认证下载的文件路径，若来宾失联，结果中记录采集失败的原因。
 
+在两个直启实例在线时，可用 `CF_TEST_STABILITY_SECONDS=3600 python3 -B -m unittest discover -s tests -p test_stability.py -v` 观测一小时。测试每隔约 30 秒检查两台设备的进程 PID、端口归属、ADB、开机标志、串口回显和 QMP。
+
 ### 全量回归
+
+GitHub Actions 配置在 push、pull request 或手动触发时运行 macOS 和 Linux 离线测试。以下硬件回归需要已准备的本机环境。
 
 在 `original` 和 `recovered` 已启动、Android SDK 和设备 ZIP 已就绪时，从仓库根目录执行。批量测试从基础镜像创建临时设备，验证并发 UI 流程、超时附件、ADB 离线诊断、磁盘快照恢复和克隆数据隔离。全新设备测试默认在宿主卷的 `.local-cf/` 组装临时磁盘，也可用 `CF_TEST_WORKDIR` 指定其他已有目录。WebSocket 回归需要前述依赖。
 
@@ -268,7 +274,7 @@ python3 -B tests/parity.py compare "$DARWIN_RESULT/result.json" "$LINUX_RESULT/r
 
 回归检查前台应用、文本输入、控件点击、升级后数据、异签名升级拒绝和拆分 APK。报告包含镜像与四个 APK 的 SHA-256、来宾构建指纹、宿主可执行文件摘要和各步耗时。截图保存在结果目录。Darwin 启停和写入层持久化另有回归，可在两个直启实例运行、`darwin-1` 已停止时执行。
 
-本机 Darwin/HVF 与下述 Linux ARM64/TCG 节点已通过这六项检查。两端使用 Android CI 构建 14781626，设备 ZIP、四个 APK 的摘要和运行中系统的构建指纹一致。两端均在测试后确认测试包已卸载，Darwin 测试前后，两个直启对照实例各自的应用列表和前台窗口一致。
+本机 Darwin/HVF、Linux ARM64/TCG 和使用 2 MiB 大页的 Linux ARM64/KVM 节点已通过这六项检查。三种配置使用 Android CI 构建 14781626，设备 ZIP、四个 APK 的摘要和运行中系统的构建指纹一致。每轮测试结束时均确认测试包已卸载，Darwin 测试前后，两个直启对照实例各自的应用列表和前台窗口一致。
 
 ```sh
 CF_TEST_DARWIN_CYCLE=1 python3 -B -m unittest discover -s tests -p test_cvd.py -v
@@ -284,6 +290,7 @@ limactl shell cf-qa -- mkdir -p project/tests
 limactl copy cfctl.py cvd_host.py phone.py prepare_phone.py instance_store.py cf_api.py cf-qa:project/
 limactl copy tests/linux-node.sh tests/parity.py cf-qa:project/tests/
 limactl copy -r linux-tcg cf-qa:project/
+limactl copy -r linux-kvm cf-qa:project/
 limactl copy "$LINUX_HOST_PACKAGE" cf-qa:host.tar.gz
 limactl copy "$GUEST_ZIP" cf-qa:guest.zip
 limactl copy -r "$BUNDLE" cf-qa:bundle
@@ -307,6 +314,26 @@ export GUEST_ZIP="$HOME/guest.zip" BUNDLE="$HOME/bundle" LINUX_RESULT="$HOME/par
 
 原生 Linux 宿主默认使用 KVM。本机 Lima 对照节点使用 `CF_LINUX_ACCEL=tcg`，由同一宿主包的 QEMU 执行软件模拟。切换模式前先正常关闭 Android。Linux 对照报告中的 `kvm.enabled` 来自运行中实例的 QMP 查询。
 
-本机的嵌套 KVM 节点可连接 ADB。首次启动时，包管理器设置 `sys.cppreopt` 返回 `Broken pipe`，随后 `system_server` 退出。该节点已正常关机，未完成应用回归。TCG 节点通过启动参数把 `ro.hw_timeout_multiplier` 设为 50，沿用 Cuttlefish 为软件模拟设置的数值。该倍率会影响 Android 服务的超时行为，两端结果用于比较应用功能。
+### 本机嵌套 KVM 的大页配置
+
+本次 KVM 验证使用 6 个外层虚拟 CPU 和 10 GiB 内存，Android 使用 2 个虚拟 CPU 和 3072 MiB 内存。按上述模板创建新 KVM 节点时，可在 `limactl start` 中加入 `--cpus=6 --memory=10`。下面的准备命令在专用 Linux 节点内挂载用户可写的 hugetlbfs，并为 Android 预留至少 1536 个 2 MiB 大页（3 GiB）。该内存池供 Linux 节点使用，预留期间会减少普通内存。节点重启后需重新准备。
+
+```sh
+# 在已解包宿主包和设备镜像的 Linux 节点内执行
+cd ~/project
+bash tests/linux-node.sh --kvm-hugepages
+export CF_RUN="$HOME/cvd-qa" CF_LINUX_ACCEL=kvm CF_KVM_HUGETLBFS="$HOME/kvm-pages"
+export PATH="$CF_RUN/bin:$PATH"
+adb -L tcp:localhost:5037 start-server
+python3 -B cfctl.py --device linux-1 device start
+python3 -B tests/parity.py run --device linux-1 --image "$GUEST_ZIP" --bundle "$BUNDLE" --out "$LINUX_RESULT"
+python3 -B cfctl.py --device linux-1 device stop
+# 将两份报告放在同一台机器后执行
+python3 -B tests/parity.py compare "$DARWIN_RESULT/result.json" "$LINUX_RESULT/result.json" --linux-accel kvm
+```
+
+本次验证保留的 `cf-qa` 节点中，仓库脚本位于 `/mnt/parity/project`，通过首启验证的运行目录为 `$HOME/cvd-qa/kvm-fresh`。复用时先执行准备脚本挂载卷，再将 `CF_RUN` 和 `PATH` 指向这个已有运行目录及其 `bin`。同一 KVM 实例重启后连续运行三轮，首次安装测试 APK 耗时 0.31–0.45 秒，`ui set-text` 耗时 6.28–6.38 秒。较早的一轮 TCG 对照分别为 25.19 秒和 73.04 秒。两种模式的外层资源和测试时间不同。
+
+原失败现场中，`cppreopts` 进程耗时 310 秒并以状态 0 结束。包管理器的等待上限为 100 秒，尝试写入 `sys.cppreopt=timed-out` 时返回 `Broken pipe`，随后 `system_server` 退出。改用专用大页后，同一 Android 构建在新的运行目录完成首次启动，包管理器记录 `cppreopts took 1872 ms`。QMP 返回 `query-kvm.enabled=true`，Linux 的 `/proc/<QEMU PID>/status` 显示 `HugetlbPages: 3145728 kB`。这些结果验证了本机可用的配置，旧现场属性连接断开的具体原因仍待确认。TCG 节点继续用超时倍率 50 做软件模拟对照。其他项目曾在嵌套 ARM64 环境中观察到 RAM 映射方式影响耗时。[Firecracker 嵌套实验记录](https://github.com/openai/tart/issues/1340)
 
 Meta 描述了 Mac 开发与 Linux CI 共用 Cuttlefish 虚拟设备的工作流。本仓库用 Android 16 phone 镜像对照 APK 和 UI 行为。蓝牙、Wi-Fi、蜂窝网络、3D 图形、OTA、Fastboot 和运行中整机快照均未做跨宿主验收。前述快照测试覆盖已关机直启实例的磁盘状态。[Meta 技术文章](https://engineering.fb.com/2026/11/13/android/cuttlefish-on-mac/)

@@ -41,14 +41,17 @@ def disk_directory(directory):
 
 def start_vm(console_input, boot_log):
     disks = disk_directory(PHONE)
+    display = os.environ.get("CF_PHONE_DISPLAY", "cocoa")
+    if display not in ("cocoa", "none"):
+        raise ValueError("CF_PHONE_DISPLAY 须为 cocoa 或 none")
     for name in ("kernel", "initrd", "userdata-overlay.qcow2", "persistent.raw", "system.qcow2"):
         if not (disks / name).is_file():
             raise RuntimeError(f"缺少 {disks / name}，请先准备设备镜像。")
     (PHONE / ".control").mkdir(mode=0o700, exist_ok=True)
     args = [
-        str(QEMU / "qemu-system-aarch64"), "-name", "Cuttlefish Android 16",
+        str(QEMU / "qemu-system-aarch64"), "-name", f"Cuttlefish Android 16 (ADB {ADB_PORT})",
         "-machine", "virt,accel=hvf,gic-version=3", "-cpu", "host", "-smp", "4", "-m", "3072",
-        "-nodefaults", "-display", "cocoa", "-g", "720x1280",
+        "-nodefaults", "-display", display,
         "-monitor", "none", "-qmp", "unix:.control/qmp.sock,server=on,wait=off",
         "-pidfile", str(PHONE / "qemu.pid"),
         "-serial", "null", "-no-reboot",
@@ -63,6 +66,8 @@ def start_vm(console_input, boot_log):
         "-nic", f"user,model=virtio-net-pci,restrict=on,hostfwd=tcp:{SERIAL}-10.0.2.15:5555",
         "-device", "virtio-serial-pci,id=virtser,max_ports=31",
     ]
+    if display == "cocoa":
+        args.extend(["-g", "720x1280"])
     for n in range(17):
         backend = "stdio,id=hvc1" if n == 1 else f"null,id=hvc{n}"
         args.extend(["-chardev", backend, "-device", f"virtconsole,chardev=hvc{n},bus=virtser.0"])
@@ -93,6 +98,8 @@ def launch_and_connect():
         boot = PHONE / "boot.log"
         vm = None
         if not vm_running():
+            if boot.is_file() and boot.stat().st_size:
+                boot.replace(PHONE / "boot.previous.log")
             with boot.open("wb") as output:
                 vm = start_vm(console, output)
         with boot.open("rb") as output:

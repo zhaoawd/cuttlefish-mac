@@ -187,11 +187,14 @@ def run(args):
         write_json(out / "result.json", report)
 
 
-def compare(a, b):
+def compare(a, b, linux_accel=None):
     results = [json.loads(path.read_text()) for path in (a, b)]
     require({r["host"] for r in results} == {"Darwin", "Linux"}, "需要 Darwin 和 Linux 的实际报告")
     for r in results:
         require(r["ok"] is True and set(r["checks"]) == CHECKS, "缺少已通过的完整回归结果")
+        if linux_accel and r["host"] == "Linux":
+            require(r.get("kvm", {}).get("enabled") is (linux_accel == "kvm"),
+                    f"Linux QMP 加速器状态与 {linux_accel} 不符")
     for key in ("inputs", "guest", "checks"):
         require(results[0][key] == results[1][key], f"两端的 {key} 不一致")
     print("Darwin 与 Linux 的镜像、APK、来宾版本及应用断言一致")
@@ -211,6 +214,7 @@ if __name__ == "__main__":
     sub = subs.add_parser("compare")
     sub.add_argument("darwin", type=Path)
     sub.add_argument("linux", type=Path)
+    sub.add_argument("--linux-accel", choices=("kvm", "tcg"))
     args = parser.parse_args()
     try:
         if args.command == "prepare":
@@ -218,6 +222,6 @@ if __name__ == "__main__":
         elif args.command == "run":
             run(args)
         else:
-            compare(args.darwin, args.linux)
+            compare(args.darwin, args.linux, args.linux_accel)
     except (KeyError, ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"{exc}\n")

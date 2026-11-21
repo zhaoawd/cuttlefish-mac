@@ -97,6 +97,22 @@ class CvdTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "直启"):
                     cfctl.execute(cfctl.parser().parse_args(["--device", NAME, *argv]))
 
+    def test_kvm_largepages_only_replaces_main_ram_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "bin/aarch64-linux-gnu/qemu/qemu-system-aarch64"
+            binary.parent.mkdir(parents=True)
+            binary.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+            binary.chmod(0o755)
+            launcher = cfctl.ROOT / "linux-kvm/qemu-system-aarch64"
+            env = dict(os.environ, ANDROID_HOST_OUT=tmp, CF_KVM_HUGETLBFS="/huge,pages")
+            pmem = "memory-backend-file,id=objpmem0,share=on,mem-path=/persist"
+            ram = "memory-backend-file,id=vm_ram,size=3072M,share=on,mem-path=/regular"
+            args = ["-accel", "kvm", "-object", pmem, "-object", ram]
+            proc = subprocess.run([launcher, *args], env=env, check=True, text=True, capture_output=True)
+            self.assertEqual(proc.stdout.splitlines(), [*args[:-1], ram.replace("/regular", "/huge,,pages")])
+            bad = subprocess.run([launcher, "-object", pmem], env=env, capture_output=True)
+            self.assertNotEqual(bad.returncode, 0)
+
 
 @unittest.skipUnless(os.environ.get("CF_TEST_DARWIN_CYCLE") == "1" and NAME == "darwin-1",
                      "需要已停止的 Darwin Cuttlefish 和两个已启动的直启实例")
@@ -150,3 +166,6 @@ class ParityReportTests(unittest.TestCase):
             b.write_text(json.dumps(dict(report, host="Linux", ok=False)))
             with self.assertRaisesRegex(RuntimeError, "完整回归"):
                 compare(a, b)
+            b.write_text(json.dumps(dict(report, host="Linux", kvm={"enabled": False})))
+            with self.assertRaisesRegex(RuntimeError, "加速器"):
+                compare(a, b, "kvm")

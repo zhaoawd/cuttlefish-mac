@@ -122,6 +122,13 @@ class CvdHost:
                             cmd.append("--extra_bootconfig_args=androidboot.hw_timeout_multiplier=50")
                         elif accel != "kvm":
                             raise ValueError("CF_LINUX_ACCEL 需要 kvm 或 tcg")
+                        elif os.environ.get("CF_KVM_HUGETLBFS"):
+                            pages = Path(os.environ["CF_KVM_HUGETLBFS"])
+                            if not pages.is_absolute() or not pages.is_dir() or not os.access(pages, os.W_OK):
+                                raise ValueError("CF_KVM_HUGETLBFS 需要可写的绝对目录")
+                            if d.run(["findmnt", "-n", "-o", "FSTYPE", "-T", pages]) != "hugetlbfs":
+                                raise ValueError("CF_KVM_HUGETLBFS 须位于已挂载的 hugetlbfs")
+                            cmd.append(f"--qemu_binary_dir={ROOT / 'linux-kvm'}")
                     # launch_cvd 派生的宿主进程会继承描述符，避免经捕获管道等待 EOF。
                     with (self.run / "cfctl-launch.log").open("ab") as out:
                         proc = subprocess.run(cmd, cwd=self.run, stdin=subprocess.DEVNULL,

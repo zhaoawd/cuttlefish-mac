@@ -1,8 +1,8 @@
 #!/bin/bash
 # 在专用 Debian ARM64 测试节点内执行。使用独立运行目录保存镜像和写入层。
 set -euo pipefail
-if [[ $# != 0 || $(uname -sm) != 'Linux aarch64' ]]; then
-  echo "请在专用 Debian ARM64 节点中运行 bash tests/linux-node.sh" >&2
+if [[ $# -gt 1 || (${1:-} != "" && ${1:-} != --kvm-hugepages) || $(uname -sm) != 'Linux aarch64' ]]; then
+  echo "请在专用 Debian ARM64 节点中运行 bash tests/linux-node.sh [--kvm-hugepages]" >&2
   exit 2
 fi
 target="$HOME/cvd-qa"
@@ -39,3 +39,20 @@ if ! sudo losetup -j "$volume" -n -O NAME | grep -Fxq "$source_device"; then
   exit 1
 fi
 printf 'CF_RUN=%s\n' "$target"
+
+if [[ ${1:-} == --kvm-hugepages ]]; then
+  pages="$HOME/kvm-pages"
+  pool=/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
+  mkdir -p "$pages"
+  if ! mountpoint -q "$pages"; then
+    [[ -z $(ls -A "$pages") ]] || { echo "挂载点已有内容: $pages" >&2; exit 1; }
+    sudo mount -t hugetlbfs -o "pagesize=2M,uid=$(id -u),gid=$(id -g),mode=0700" none "$pages"
+  fi
+  [[ $(findmnt -rn -o FSTYPE --mountpoint "$pages") == hugetlbfs && $(stat -fc %S "$pages") == 2097152 && -w $pages ]] ||
+    { echo "需要可写的 2 MiB hugetlbfs: $pages" >&2; exit 1; }
+  if (( $(cat "$pool") < 1536 )); then
+    echo 1536 | sudo tee "$pool" >/dev/null
+  fi
+  (( $(cat "$pool") >= 1536 )) || { echo "未能预留 3072 MiB 大页内存" >&2; exit 1; }
+  printf 'CF_KVM_HUGETLBFS=%s\n' "$pages"
+fi
