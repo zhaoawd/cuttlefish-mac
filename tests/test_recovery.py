@@ -31,7 +31,8 @@ class RecoveryTest(unittest.TestCase):
         cmd = [sys.executable, str(ROOT / "recovery.py"), str(archive), "--adb-port", str(guest_port)]
         if os.environ.get("UNPACK_BOOTIMG"):
             cmd.extend(["--unpack-bootimg", os.environ["UNPACK_BOOTIMG"]])
-        with tempfile.TemporaryDirectory(dir=archive.parent) as tmp:
+        with tempfile.TemporaryDirectory(dir=os.environ.get("CF_TEST_WORKDIR", archive.parent)) as tmp:
+            cmd.extend(["--work-dir", tmp])
             env = dict(os.environ, HOME=tmp, ANDROID_SDK_HOME=tmp, TMPDIR=tmp,
                        ANDROID_USER_HOME=str(Path(tmp) / ".android"), ADB_MDNS_AUTO_CONNECT="0", ADB_USB="0")
             client = [adb, "-P", str(server_port)]

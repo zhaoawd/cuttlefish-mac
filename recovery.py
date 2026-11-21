@@ -21,6 +21,7 @@ def main():
                         default=local / "aosp-volume/aosp/system/tools/mkbootimg/unpack_bootimg.py")
     parser.add_argument("--adb-port", type=int, metavar="PORT",
                         help="将本机回环端口转发至 Recovery 的 TCP 5555")
+    parser.add_argument("--work-dir", type=Path, help="保存临时解包文件的目录，默认使用设备 ZIP 所在目录")
     args = parser.parse_args()
     if args.adb_port is not None and not 1 <= args.adb_port <= 65535:
         parser.error("ADB 端口取值范围为 1 至 65535")
@@ -32,7 +33,7 @@ def main():
         parser.error("需要 Meta qemu-system-aarch64 和 lz4")
 
     # 将临时镜像保存在输入 ZIP 所在卷，保持相同的空间限额。
-    with tempfile.TemporaryDirectory(dir=args.guest_zip.resolve().parent) as tmp:
+    with tempfile.TemporaryDirectory(dir=args.work_dir or args.guest_zip.resolve().parent) as tmp:
         work = Path(tmp)
         with ZipFile(args.guest_zip) as archive:
             for name in ("boot", "init_boot", "vendor_boot"):
@@ -54,10 +55,12 @@ def main():
 
         network = []
         if args.adb_port:
-            network = ["-nic", "user,model=virtio-net-pci,restrict=on,"
-                       f"hostfwd=tcp:127.0.0.1:{args.adb_port}-:5555"]
+            network = ["-netdev", "user,id=recoverynet,restrict=on,"
+                       f"hostfwd=tcp:127.0.0.1:{args.adb_port}-:5555",
+                       "-device", "virtio-net-pci,netdev=recoverynet,romfile="]
+        accel = "kvm" if sys.platform.startswith("linux") else "hvf"
         return subprocess.call([
-            str(qbin / "qemu-system-aarch64"), "-machine", "virt,accel=hvf,gic-version=3",
+            str(qbin / "qemu-system-aarch64"), "-machine", f"virt,accel={accel},gic-version=3",
             "-cpu", "host", "-smp", "2", "-m", "2048", "-nodefaults", "-display", "none",
             "-serial", "mon:stdio", *network, "-no-reboot", "-kernel", str(work / "boot/kernel"),
             "-initrd", str(rd), "-append",

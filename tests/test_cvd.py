@@ -12,6 +12,20 @@ from cvd_host import CvdHost, NAME
 
 
 class CvdTests(unittest.TestCase):
+    def test_start_recovers_local_adb_with_current_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = CvdHost(Path(tmp))
+            device = Mock()
+            with patch.dict(os.environ, HOME="/home/test", ADB_SERVER_SOCKET="tcp:invalid:1234",
+                            ANDROID_ADB_SERVER_PORT="1234", CF_API_TOKEN="example"), \
+                    patch.object(host, "processes", return_value={"conflict": False, "host_running": True}):
+                host.lifecycle(device, "start")
+            self.assertEqual(device.run.call_args.args[0], ["adb", "-L", "tcp:localhost:5037", "start-server"])
+            env = device.run.call_args.kwargs["env"]
+            self.assertEqual(env["HOME"], "/home/test")
+            self.assertFalse({"ADB_SERVER_SOCKET", "ANDROID_ADB_SERVER_PORT", "CF_API_TOKEN"} & env.keys())
+            device.ready.assert_called_once_with(wait=True)
+
     def test_stale_instance_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp) / "cuttlefish/assembly/cuttlefish_config.json"

@@ -152,13 +152,10 @@ UI 操作超时时，CLI 将控件树和截图保存到独立目录。直启实�
 
 GitHub Actions 配置在 push、pull request 或手动触发时运行 macOS 和 Linux 离线测试。以下硬件回归需要已准备的本机环境。
 
-在 `original` 和 `recovered` 已启动、Android SDK 和设备 ZIP 已就绪时，从仓库根目录执行。批量测试从基础镜像创建临时设备，验证并发 UI 流程、超时附件、ADB 离线诊断、磁盘快照恢复和克隆数据隔离。全新设备测试默认在宿主卷的 `.local-cf/` 组装临时磁盘，也可用 `CF_TEST_WORKDIR` 指定其他已有目录。WebSocket 回归需要前述依赖。
+在 Apple Silicon 上启动 `original` 和 `recovered`，正常关闭独立的 `darwin-1`。准备 Android SDK、JDK、含 WebSocket 依赖的 Python、`fastboot` 和设备树工具 `fdtput`，在仓库根目录执行下面的命令。入口启用所有实机用例，任一用例跳过或失败均返回非零。默认使用仓库内的设备 ZIP、解包脚本及 120 秒稳定性采样，可通过 `GUEST_ZIP`、`UNPACK_BOOTIMG`、`CF_TEST_WORKDIR`、`CF_FDTPUT` 和 `CF_TEST_STABILITY_SECONDS` 指定本机路径或时长。
 
 ```sh
-export GUEST_ZIP="$PWD/.local-cf/aosp-volume/guest/aosp_cf_arm64_only_phone-img-14781626.zip"
-export UNPACK_BOOTIMG="$PWD/.local-cf/aosp-volume/probe/unpack_bootimg.py"
-CF_TEST_CLI=1 CF_TEST_BATCH=1 CF_TEST_WS=1 CF_TEST_PHONE=1 CF_TEST_QMP=1 \
-  python3 -B -m unittest discover -s tests -v
+.local-cf/cli-venv/bin/python -B tests/macos_hardware.py
 ```
 
 ## 已验证的 Recovery 启动
@@ -292,7 +289,6 @@ python3 -B tests/parity.py run --device darwin-1 --bundle "$BUNDLE" \
 
 ```sh
 export PATH="$CF_RUN/bin:$PATH"
-adb -L tcp:localhost:5037 start-server
 python3 -B cfctl.py --device linux-1 device start
 python3 -B tests/parity.py run --device linux-1 --bundle "$BUNDLE" \
   --image "$GUEST_ZIP" --out "$LINUX_RESULT"
@@ -352,7 +348,6 @@ cd ~/project
 bash tests/linux-node.sh --kvm-hugepages
 export CF_RUN="$HOME/cvd-qa" CF_LINUX_ACCEL=kvm CF_KVM_HUGETLBFS="$HOME/kvm-pages"
 export PATH="$CF_RUN/bin:$PATH"
-adb -L tcp:localhost:5037 start-server
 python3 -B cfctl.py --device linux-1 device start
 python3 -B tests/parity.py run --device linux-1 --image "$GUEST_ZIP" --bundle "$BUNDLE" --out "$LINUX_RESULT"
 python3 -B cfctl.py --device linux-1 device stop
@@ -364,4 +359,42 @@ python3 -B tests/parity.py compare "$DARWIN_RESULT/result.json" "$LINUX_RESULT/r
 
 原失败现场中，`cppreopts` 进程耗时 310 秒并以状态 0 结束。包管理器的等待上限为 100 秒，尝试写入 `sys.cppreopt=timed-out` 时返回 `Broken pipe`，随后 `system_server` 退出。改用专用大页后，同一 Android 构建在新的运行目录完成首次启动，包管理器记录 `cppreopts took 1872 ms`。QMP 返回 `query-kvm.enabled=true`，Linux 的 `/proc/<QEMU PID>/status` 显示 `HugetlbPages: 3145728 kB`。这些结果验证了本机可用的配置，旧现场属性连接断开的具体原因仍待确认。TCG 节点继续用超时倍率 50 做软件模拟对照。其他项目曾在嵌套 ARM64 环境中观察到 RAM 映射方式影响耗时。[Firecracker 嵌套实验记录](https://github.com/openai/tart/issues/1340)
 
-Meta 描述了 Mac 开发与 Linux CI 共用 Cuttlefish 虚拟设备的工作流。本仓库用 Android 16 phone 镜像对照 APK 和 UI 行为。蓝牙、Wi-Fi、蜂窝网络、3D 图形、OTA、Fastboot 和运行中整机快照均未做跨宿主验收。前述快照测试覆盖已关机直启实例的磁盘状态。[Meta 技术文章](https://engineering.fb.com/2026/11/13/android/cuttlefish-on-mac/)
+Meta 描述了 Mac 开发与 Linux CI 共用 Cuttlefish 虚拟设备的工作流。本仓库用 Android 16 phone 镜像对照 APK 和 UI 行为。下面列出已用同一测试程序在 Darwin/HVF 与 Linux/KVM 复验的范围。[Meta 技术文章](https://engineering.fb.com/2026/11/13/android/cuttlefish-on-mac/)
+
+### 本地硬件任务和设备能力
+
+在带 Android SDK 的机器上将 `tests/apk/build.sh` 的输出放入新目录。将其中的 `v1.apk`、同一份 `text.apk` 和 v2rayNG 2.3.14 放到两个宿主可读的位置。测试开始前专用 Cuttlefish 实例须已停止。Mac 的两个直启对照实例保持在线。Linux 使用上文的大页、`CF_RUN` 和 `PATH` 配置。`device start` 会使用当前用户的 ADB 密钥启动或复用本机 5037 服务。
+
+```sh
+mkdir -p .local-cf/media-fixture
+bash tests/apk/build.sh .local-cf/media-fixture
+python3 -B tests/host_acceptance.py --fixture .local-cf/media-fixture/v1.apk \
+  --apk apks/v2rayNG_2.3.14_universal.apk --helper .local-cf/text-helper/text.apk \
+  --out .local-cf/acceptance-run
+```
+
+同一入口负责启动、真实应用回归、设备能力回归和来宾正常关机。每次指定新的输出目录。`result.json` 记录启停结果，`app/result.json` 和 `platform/result.json` 记录各断言。设备能力回归使用 `dev.cuttlefish.cfctl.fixture`，结束时卸载测试包。相机测试只读取图像尺寸和亮度平面的字节数。
+
+| 项目 | 已验证的操作 | 验证范围 |
+| --- | --- | --- |
+| 图形 | 向 EGL 离屏表面绘制两层不同深度的三角形，读回中心像素 RGB 为 0、255、0 | 来宾 SwiftShader 软件渲染 |
+| 音频 | 向 AudioTrack 写入 16000 帧静音 PCM，播放游标到达第 16000 帧 | Android 播放路径 |
+| 相机 | 使用 Camera2 从相机 0 获取一帧 160 × 120 的 YUV 图像 | Android 来宾相机 |
+| Wi-Fi、蓝牙 | 切换适配器状态并恢复初始值 | 开关与状态读回；网络吞吐、蓝牙配对及传输待验收 |
+| 蜂窝网络 | 模拟 SIM 为 `LOADED`，语音和数据均注册为 `IN_SERVICE` | 注册状态；实际通话和数据传输待验收 |
+| Fastboot | 在独立、无磁盘的配套 U-Boot 上，用 Fastboot/UDP 读取 `is-userspace: no` | 单独运行 `test_fastboot.py`；刷写、解锁及 fastbootd 均在此用例范围之外 |
+
+构建 14781626 的来宾 init 读取 `ro.boot.wifi_impl` 来启动 `setup_wifi`。Darwin 原配置提供了 `ro.boot.vendor.wifi_impl`，HAL 日志报告 `wlan0 (No such device)`。`cf.sh start` 现在同时传入 `androidboot.wifi_impl=virt_wifi`。重启后出现 `wlan0`，回归可重复启用和恢复 Wi-Fi。
+
+Linux 的 Recovery 和 Fastboot 可独立复验。前者只使用内核与 ramdisk，后者只使用 U-Boot；两者均无需挂载 Android 用户盘。Darwin 独立 U-Boot 的 Fastboot/TCP 试验中，来宾显示监听并回复 ARP，请求未完成 TCP 握手，原因未查明。Linux 的 `CF_TEST_WORKDIR` 须可写，`QEMU_BINARY_DIR` 指向宿主包内的 QEMU。
+
+```sh
+export QEMU_BINARY_DIR="$CF_RUN/bin/aarch64-linux-gnu/qemu"
+CF_TEST_WORKDIR="$HOME" GUEST_ZIP="$GUEST_ZIP" UNPACK_BOOTIMG="$CF_RUN/bin/unpack_bootimg.py" \
+  python3 -B -m unittest discover -s tests -p test_recovery.py -v
+CF_TEST_FASTBOOT=1 python3 -B -m unittest discover -s tests -p test_fastboot.py -v
+```
+
+手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、六项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
+
+当前设备 ZIP 包含 11 个镜像与说明文件。本地验收输入中没有与目标构建匹配的签名 OTA 包。运行中整机快照也有宿主端限制：本次 Darwin 所用 Cuttlefish 源码的 `ServerLoopImpl::SuspendGuest` 仅处理 crosvm，选择 QEMU 时返回不支持。已验收的快照能力为关机后的直启实例磁盘保存和恢复。

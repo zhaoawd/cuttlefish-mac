@@ -91,12 +91,18 @@ class CvdHost:
         return dict(host_running=bool(roots), qemu=vm, owns_port=owner,
                     conflict=foreign or bool(listeners and not owner))
 
-    def environment(self):
-        env = dict(os.environ, HOME=str(self.run), CF_RUN=str(self.run), ANDROID_HOST_OUT=str(self.run),
-                   ANDROID_PRODUCT_OUT=str(self.run), CUTTLEFISH_INSTANCE="1")
-        env.pop("CUTTLEFISH_CONFIG_FILE", None)
+    @staticmethod
+    def client_environment():
+        env = os.environ.copy()
         for key in ("CF_API_TOKEN", "ADB_SERVER_SOCKET", "ANDROID_ADB_SERVER_ADDRESS", "ANDROID_ADB_SERVER_PORT"):
             env.pop(key, None)
+        return env
+
+    def environment(self):
+        env = self.client_environment()
+        env.update(HOME=str(self.run), CF_RUN=str(self.run), ANDROID_HOST_OUT=str(self.run),
+                   ANDROID_PRODUCT_OUT=str(self.run), CUTTLEFISH_INSTANCE="1")
+        env.pop("CUTTLEFISH_CONFIG_FILE", None)
         return env
 
     def lifecycle(self, d, action):
@@ -107,6 +113,8 @@ class CvdHost:
             if state["conflict"]:
                 raise RuntimeError("实例号或 ADB 端口已被其他进程占用")
             if action == "start":
+                # 使用当前用户的 ADB 密钥，包括从节点重启或宿主已启动的状态恢复时。
+                d.run(["adb", "-L", "tcp:localhost:5037", "start-server"], env=self.client_environment())
                 if not state["host_running"]:
                     if platform.system() == "Darwin":
                         cmd = [ROOT / "cf.sh", "start"]

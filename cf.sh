@@ -29,6 +29,7 @@ case ${1:-} in
     exec env HOME="$PWD" ANDROID_HOST_OUT="$PWD" ANDROID_PRODUCT_OUT="$PWD" \
       ./bin/launch_cvd --base_instance_num=1 --daemon --vm_manager=qemu_cli \
       --qemu_binary_dir="$qbin" --gpu_mode=guest_swiftshader --device_external_network=slirp \
+      --extra_bootconfig_args=androidboot.wifi_impl=virt_wifi \
       --vhost_user_vsock=true --start_webrtc=false --report_anonymous_usage_stats=n
     ;;
   verify)

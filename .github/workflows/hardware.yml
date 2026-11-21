@@ -1,0 +1,57 @@
+name: ARM64 hardware acceptance
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cuttlefish-hardware
+  cancel-in-progress: false
+
+jobs:
+  hardware:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macOS, Linux]
+    runs-on: [self-hosted, ARM64, cuttlefish-lab, "${{ matrix.os }}"]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: source-${{ github.run_id }}-${{ github.run_attempt }}
+          persist-credentials: false
+      - name: Run local acceptance entry point
+        working-directory: source-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "${CF_LAB:?}"
+          ln -s "$CF_LAB" .local-cf
+          python3 -B tests/host_acceptance.py --apk "${CF_APP_APK:?}" --helper "${CF_TEXT_APK:?}" \
+            --fixture "${CF_FIXTURE_APK:?}" --out "$RUNNER_TEMP/cf-acceptance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Save verification reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/cf-acceptance-${{ github.run_id }}-${{ github.run_attempt }}/result.json
+            ${{ runner.temp }}/cf-acceptance-${{ github.run_id }}-${{ github.run_attempt }}/app/result.json
+            ${{ runner.temp }}/cf-acceptance-${{ github.run_id }}-${{ github.run_attempt }}/platform/result.json
+          if-no-files-found: error
+          retention-days: 3
+
+  compare:
+    needs: hardware
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hardware-*
+          path: reports
+      - run: python3 -B tests/compare_hardware.py reports/hardware-macOS reports/hardware-Linux

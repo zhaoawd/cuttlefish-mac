@@ -43,10 +43,21 @@
 - [x] 在独立实例上验证 Cocoa、无窗口启动、设置页、截图、上一次串口日志保留和正常关机。双实例 PID、ADB、串口和 QMP 的 120 秒定时采样通过。
 - [x] 在独立 Linux 运行目录复验嵌套 KVM 首次启动。使用 2 MiB hugetlbfs 映射 3072 MiB 来宾 RAM 后，同一 CI 镜像完成首启、六项应用回归和正常关机。仓库 CLI 重启后连续三轮对照通过，报告在 `.local-cf/residual/kvm-release*.json`。
 - [x] 添加 macOS/Linux 离线测试工作流，并在两种宿主本地运行同一测试命令。Mac 启用各项实机条件后的 22 项回归全部通过，记录位于 `.local-cf/residual/macos-full.log`。
-- [ ] 远端 CI 运行和硬件端到端任务调度尚未验收。当前提交仅保留在本地。
+- [ ] 远端 CI 执行、自托管 runner 注册与实际调度尚未验收。手动工作流及本地硬件入口已有本机验证记录。
 
 ## 真实 APK 与 Unicode 输入
 
 - [x] 用 v2rayNG 2.3.14 的本地配置搜索框验证按焦点选择 EditText、输入中文及 emoji、替换、清空、拒绝非输入控件，并检查返回应用首页后的状态。
 - [x] Darwin/HVF 实测通过，测试前后 original 和 recovered 的应用列表及前台窗口一致。首次使用系统返回键的失败记录包含控件树、截图和 logcat。最终流程使用应用内返回按钮并检查所属包名。
 - [x] Linux ARM64/KVM 完成相同场景，QMP 报告 KVM 已启用。两端应用 APK 与输入组件的 SHA-256、Android 构建指纹及搜索断言一致，均已卸载测试包。cf-tcg 的应用列表摘要和前台窗口复核一致。两端报告分别位于 `.local-cf/real-app/darwin-release/result.json` 和 `.local-cf/real-app/linux-release/result.json`。
+
+## 本地硬件验收与待办
+
+- [x] 修复 Cuttlefish 冷启动依赖手动启动 ADB 的问题。cf-qa 初始 5037 无监听，启动后仅监听 127.0.0.1，重复启动、APK 搜索和正常关机通过。
+- [x] 修复 14781626 的 Darwin Wi-Fi 初始化参数。原始日志显示 HAL 未找到 wlan0，修复后 init 执行 setup_wifi，六项设备能力回归通过。
+- [x] 两端实测同一份测试 APK 的深度缓冲渲染、AudioTrack 静音播放、Camera2 一帧 YUV、Wi-Fi 与蓝牙状态切换恢复、模拟 SIM 注册。两端报告位于 `.local-cf/local-acceptance/job-{darwin,linux}/platform/result.json`。
+- [x] 无磁盘 Recovery 在 Darwin/HVF 和 Linux/KVM 通过 ADB 核验。配套 U-Boot 在两端均通过 Fastboot/UDP 只读查询 `is-userspace: no`。独立测试日志位于 `.local-cf/local-acceptance/*-fastboot-release.log`。
+- [x] 串行硬件入口在两端完成启动、真实应用回归、设备检查和正常关机。两端报告经本地比较通过；actionlint 检查两份工作流通过。Mac 全量 unittest 的 26 项零跳过，新增的第 27 项 Fastboot 在同机单独通过。
+- [ ] Fastboot/TCP 在 Darwin 无磁盘 U-Boot 的回环转发上未完成握手，原因未查明。Recovery 的普通 ADB shell 无权设置 fastbootd 的传输属性；用户空间 fastbootd 仍待端到端验证。
+- [ ] OTA 更新和回退缺少本次构建可用的签名 OTA 包。当前 Darwin Cuttlefish 的 QEMU 宿主端尚未实现运行中整机快照所需的暂停路径。
+- [ ] Wi-Fi 数据传输、蓝牙配对与数据交换、模拟通话和蜂窝数据尚未做端到端验收。现有虚拟设备测试的范围见 README。
