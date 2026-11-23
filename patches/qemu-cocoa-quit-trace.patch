@@ -1,0 +1,28 @@
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -1393,3 +1393,18 @@
+     COCOA_DEBUG("QemuCocoaAppController: applicationShouldTerminate\n");
+-    return [self verifyQuit];
++    NSAppleEventDescriptor *event =
++        [[NSAppleEventManager sharedAppleEventManager] currentAppleEvent];
++    BOOL trace = g_strcmp0(g_getenv("CF_COCOA_QUIT_TRACE"), "1") == 0;
++    if (trace) {
++        if (event.eventClass == kCoreEventClass && event.eventID == kAEQuitApplication) {
++            NSAppleEventDescriptor *pid = [event attributeDescriptorForKeyword:keySenderPIDAttr];
++            NSLog(@"CF_COCOA_QUIT request=apple-event sender_pid=%d", pid ? pid.int32Value : -1);
++        } else {
++            NSLog(@"CF_COCOA_QUIT request=terminate");
++        }
++    }
++    BOOL confirmed = [self verifyQuit];
++    if (trace) {
++        NSLog(@"CF_COCOA_QUIT decision=%@", confirmed ? @"quit" : @"cancel");
++    }
++    return confirmed ? NSTerminateNow : NSTerminateCancel;
+ }
+@@ -1422,2 +1437,5 @@
+     COCOA_DEBUG("QemuCocoaAppController: windowShouldClose\n");
++    if (g_strcmp0(g_getenv("CF_COCOA_QUIT_TRACE"), "1") == 0) {
++        NSLog(@"CF_COCOA_QUIT action=window-close");
++    }
+     [NSApp terminate: sender];

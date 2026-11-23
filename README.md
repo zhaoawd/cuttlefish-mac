@@ -236,6 +236,8 @@ python3 -B cfctl.py --device darwin-1 device stop
 
 在固定版本 QEMU 源码的空构建目录中配置。需要 Python、Ninja、pkg-config、GLib、Pixman 和 Xcode 的 `Rez`、`SetFile`。所选源码包含 Meson wheel，Meson 可通过源码的 wrap 文件获取其余子项目。
 
+构建前在 QEMU 源码根目录执行 `patch -p1 < "$PROJECT/patches/qemu-cocoa-quit-trace.patch"`，其中 `PROJECT` 指向本仓库。启动实例时设置 `CF_COCOA_QUIT_TRACE=1` 可记录 Cocoa 退出请求。直启实例将记录写入 `qemu.log`。窗口关闭路径记录 `action=window-close`，退出 Apple Event 提供发送 PID 时记录 `sender_pid`，通用退出路径记录 `request=terminate`。确认框返回后记录 `decision=quit` 或 `decision=cancel`。可用 `CF_TEST_COCOA_TRACE=1 python3 -B -m unittest discover -s tests -p test_cocoa.py -v` 验证独立无磁盘实例收到的发送 PID。
+
 ```sh
 "$QEMU_SRC/configure" --prefix="$QEMU_PREFIX" --target-list=aarch64-softmmu \
   --enable-hvf --enable-cocoa --enable-vhost-user --enable-slirp \

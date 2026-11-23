@@ -76,3 +76,12 @@
 - [ ] 验证运行中快照加载失败后的处理。QEMU 9.2.3 的 `loadvm` 在加载前暂停虚拟机，仅在加载成功后恢复运行。需要用损坏的快照复现失败路径，核对 `doctor` 报告的状态并明确恢复步骤。
 - [x] `doctor` 读取 QMP `query-migrate`。本机 Linux ARM64 节点确认嵌套 KVM 已启用，报告 vhost-user 后端和输入设备的迁移阻碍，随后完成 Android 正常关机。记录位于 `.local-cf/followup/linux.log`。
 - [ ] Darwin `launch_cvd` 整机运行中快照尚未通过。已有 QMP 报告明确列出 vhost-user 后端缺少 `LOG_SHMFD`、virtio-sound、vhost-user-vsock 和 vhost-user-input。需要为这些设备及对应后端保存、恢复状态，并验证恢复后的连接和输入，再验收整机。现有 CVD 冷恢复流程可继续使用。
+- [x] 为 Cocoa 增加可选退出诊断。独立无磁盘实例收到定向退出 Apple Event，记录的发送 PID 与测试进程一致。记录位于 `.local-cf/followup/cocoa-test.log`。
+- [ ] 00:14 两次历史退出已定位到 AppKit 确认退出。针对两个 QEMU PID 检查的系统日志中，第二个实例在退出前获得键盘焦点，并有一次 Apple Event 端口查询。这些记录没有给出退出请求的发送方。
+- [ ] GitHub Actions 只读 API 返回 0 个已登记工作流、0 个仓库级 runner。远端硬件验收需要默认分支上的工作流、具备指定标签和测试资源的 runner，以及一次实际调度。
+
+### macOS 完整实机回归
+
+2026-11-23 在 Apple Silicon 上用 `.local-cf/cli-venv/bin/python -B tests/macos_hardware.py` 执行 35 项用例，耗时 490.599 秒，退出码 0，35 项通过，零失败、零错误、零跳过。覆盖 `launch_cvd` 两轮启停、直启运行中快照、Cocoa 退出事件发送 PID、HTTP/WebSocket、Recovery、Fastboot，以及 120 秒双直启实例稳定性采样。记录见 [完整实机日志](./.local-cf/followup/port-ownership-macos-hardware.log)。
+
+实机回归前只读复核了 16521、16522，两个长期实例均未运行，ADB 未连接，无 QMP 套接字，也未发现可见的 QEMU 窗口。回归使用两个临时直启副本，长期实例磁盘未改动。测试结束后临时副本已正常关机，16521、16522 和 6520 均无监听。记录见 [回归前复核](./.local-cf/followup/port-ownership-controls.log) 和 [回归后复核](./.local-cf/followup/port-ownership-after.log)。

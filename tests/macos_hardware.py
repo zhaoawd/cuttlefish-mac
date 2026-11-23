@@ -16,7 +16,7 @@ def main():
         ROOT / ".local-cf/aosp-volume/guest/aosp_cf_arm64_only_phone-img-14781626.zip"))
     os.environ.setdefault("UNPACK_BOOTIMG", str(ROOT / ".local-cf/aosp-volume/probe/unpack_bootimg.py"))
     os.environ.setdefault("CF_TEST_STABILITY_SECONDS", "120")
-    for name in ("CLI", "BATCH", "WS", "PHONE", "QMP", "DARWIN_CYCLE", "FASTBOOT"):
+    for name in ("CLI", "BATCH", "WS", "PHONE", "QMP", "DARWIN_CYCLE", "FASTBOOT", "COCOA_TRACE"):
         os.environ["CF_TEST_" + name] = "1"
     for key in ("GUEST_ZIP", "UNPACK_BOOTIMG"):
         if not Path(os.environ[key]).is_file():
