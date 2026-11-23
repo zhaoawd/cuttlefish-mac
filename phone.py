@@ -39,12 +39,21 @@ def disk_directory(directory):
     return directory
 
 
+def persistent_disk(disks):
+    qcow = disks / "persistent.qcow2"
+    raw = disks / "persistent.raw"
+    if qcow.is_file() and raw.is_file():
+        raise ValueError(f"实例有两个持久分区磁盘：{disks}")
+    return (qcow, "qcow2") if qcow.is_file() else (raw, "raw")
+
+
 def start_vm(console_input, boot_log):
     disks = disk_directory(PHONE)
     display = os.environ.get("CF_PHONE_DISPLAY", "cocoa")
     if display not in ("cocoa", "none"):
         raise ValueError("CF_PHONE_DISPLAY 须为 cocoa 或 none")
-    for name in ("kernel", "initrd", "userdata-overlay.qcow2", "persistent.raw", "system.qcow2"):
+    persist, fmt = persistent_disk(disks)
+    for name in ("kernel", "initrd", "userdata-overlay.qcow2", persist.name, "system.qcow2"):
         if not (disks / name).is_file():
             raise RuntimeError(f"缺少 {disks / name}，请先准备设备镜像。")
     (PHONE / ".control").mkdir(mode=0o700, exist_ok=True)
@@ -61,7 +70,7 @@ def start_vm(console_input, boot_log):
         "-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
         "-drive", f"if=none,id=os,format=qcow2,file={disks}/userdata-overlay.qcow2",
         "-device", "virtio-blk-pci,drive=os",
-        "-drive", f"if=none,id=persist,format=raw,file={disks}/persistent.raw",
+        "-drive", f"if=none,id=persist,format={fmt},file={persist}",
         "-device", "virtio-blk-pci,drive=persist",
         "-nic", f"user,model=virtio-net-pci,restrict=on,hostfwd=tcp:{SERIAL}-10.0.2.15:5555",
         "-device", "virtio-serial-pci,id=virtser,max_ports=31",
@@ -84,7 +93,9 @@ def vm_running(directory=PHONE):
     if not pid.isdecimal():
         return False
     state = subprocess.run(["ps", "-o", "command=", "-p", pid], capture_output=True, text=True)
-    return state.returncode == 0 and "qemu-system-aarch64" in state.stdout and str(disk_directory(directory) / "persistent.raw") in state.stdout
+    persist, fmt = persistent_disk(disk_directory(directory))
+    return (state.returncode == 0 and "qemu-system-aarch64" in state.stdout
+            and f"id=persist,format={fmt},file={persist} " in state.stdout)
 
 
 def launch_and_connect():
@@ -153,15 +164,19 @@ def main():
     elif not vm_running():
         parser.error(f"未找到设备目录 {PHONE} 对应的运行中实例。")
     elif action == "stop":
-        if adb("shell", "getprop", "ro.serialno") != "CUTTLEFISH-DIRECT":
-            parser.error("当前 ADB 设备的序列号与本实例不符。")
-        adb("shell", "su", "0", "reboot", "-p", check=False)
-        for _ in range(60):
-            if not (PHONE / "qemu.pid").exists():
-                print("Android 已关机。")
-                return
-            time.sleep(1)
-        raise RuntimeError("等待本实例关机超时。")
+        with (PHONE / "control.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not vm_running():
+                parser.error("实例已经停止。")
+            if adb("shell", "getprop", "ro.serialno") != "CUTTLEFISH-DIRECT":
+                parser.error("当前 ADB 设备的序列号与本实例不符。")
+            adb("shell", "su", "0", "reboot", "-p", check=False)
+            for _ in range(60):
+                if not (PHONE / "qemu.pid").exists():
+                    print("Android 已关机。")
+                    return
+                time.sleep(1)
+            raise RuntimeError("等待本实例关机超时。")
     else:
         for prop, expected in [("sys.boot_completed", "1"), ("ro.build.version.release", "16"),
                                ("ro.product.cpu.abi", "arm64-v8a"), ("ro.hardware", "cutf_cvm")]:

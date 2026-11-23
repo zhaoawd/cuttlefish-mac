@@ -72,3 +72,7 @@
 ## Darwin 端口归属、运行中快照、Cocoa 退出诊断与远端 CI
 
 - [x] 修复 Darwin 端口归属查询。实机回归使用的 Python 3.13 执行 `netstat` 时退出码为 0，标准输出和标准错误均为空。直启实例与 `launch_cvd` 改用 `nettop` 查询监听 PID，分别核对 QEMU PID 和登记的 `run_cvd` 进程树。独立监听实测覆盖 IPv4、IPv6 同端口多 PID 和端口关闭。记录见 [端口复现](./.local-cf/followup/port-ownership-repro.log)。
+- [x] 在 Apple Silicon 上用两个 qcow2 可写磁盘启动独立 Android 直启实例。QEMU 9.2.3 保存 2.82 GiB 虚拟机状态。修改来宾 tmpfs 和 userdata 中的随机标记后恢复，启动标识与两个标记均等于保存时的值。正式 CLI 回归还验证同名冲突、快照列举、删除、ADB 重连和正常关机。
+- [ ] 验证运行中快照加载失败后的处理。QEMU 9.2.3 的 `loadvm` 在加载前暂停虚拟机，仅在加载成功后恢复运行。需要用损坏的快照复现失败路径，核对 `doctor` 报告的状态并明确恢复步骤。
+- [x] `doctor` 读取 QMP `query-migrate`。本机 Linux ARM64 节点确认嵌套 KVM 已启用，报告 vhost-user 后端和输入设备的迁移阻碍，随后完成 Android 正常关机。记录位于 `.local-cf/followup/linux.log`。
+- [ ] Darwin `launch_cvd` 整机运行中快照尚未通过。已有 QMP 报告明确列出 vhost-user 后端缺少 `LOG_SHMFD`、virtio-sound、vhost-user-vsock 和 vhost-user-input。需要为这些设备及对应后端保存、恢复状态，并验证恢复后的连接和输入，再验收整机。现有 CVD 冷恢复流程可继续使用。

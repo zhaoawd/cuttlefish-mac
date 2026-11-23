@@ -120,6 +120,17 @@ python3 -B cfctl.py --device qa-one device start
 
 任务结束后可用 `snapshot delete NAME` 删除指定快照。对已经关机的克隆执行 `device delete` 会删除该实例及其快照。此命令仅接受由 `device clone` 创建的实例。
 
+使用新版 `device clone --clean` 创建的 Darwin 直启实例可在运行时保存和恢复整机状态。两个可写磁盘均使用 qcow2，QEMU 将 RAM、CPU、虚拟设备以及磁盘状态保存在内部快照中。恢复会撤销该实例保存点之后的操作，并重新连接 ADB。快照可能包含应用内存中的数据，磁盘需为 RAM 和后续写入预留空间。本机一次 3072 MiB 来宾实验记录的虚拟机状态大小为 2.82 GiB。
+
+```sh
+python3 -B cfctl.py --device qa-one snapshot live-save before-install
+python3 -B cfctl.py --device qa-one snapshot live-list
+python3 -B cfctl.py --device qa-one snapshot live-restore before-install
+python3 -B cfctl.py --device qa-one snapshot live-delete before-install
+```
+
+保留 `persistent.raw` 的已有实例可继续使用关机磁盘快照。Darwin `launch_cvd` 的 QEMU 配置包含会阻止迁移的设备。在运行实例上执行 `cfctl.py --device darwin-1 --json doctor`，可从 `result.qmp.query-migrate.blocked-reasons` 查看 QEMU 报告的原因。该字段为空仅表示 QEMU 未报告迁移阻碍。已有的 CVD 冷恢复验收单独验证关机后的磁盘恢复。
+
 ### HTTP 和 WebSocket API
 
 服务在前台运行，只监听本机回环地址。HTTP 使用 Python 标准库。需要 WebSocket 时，在已安装 `websockets==15.0.1` 的 Python 环境中增加 `--ws-port 8766`。端口设为 0 时由系统分配，服务在启动时打印地址。外部客户端可通过 SSH 端口转发接入。

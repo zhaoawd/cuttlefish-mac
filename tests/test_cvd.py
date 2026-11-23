@@ -118,7 +118,8 @@ class CvdTests(unittest.TestCase):
                              ["-accel", "tcg,thread=multi", "-cpu", "max", "-drive", "file=a b.img"])
 
     def test_direct_disk_commands_refuse_cvd(self):
-        for argv in (["device", "delete"], ["device", "clone", "bad"], ["snapshot", "save", "bad"]):
+        for argv in (["device", "delete"], ["device", "clone", "bad"], ["snapshot", "save", "bad"],
+                     ["snapshot", "live-restore", "bad"]):
             with self.subTest(argv=argv), tempfile.TemporaryDirectory() as tmp, \
                     patch("cfctl.run_directory", return_value=Path(tmp)):
                 with self.assertRaisesRegex(ValueError, "直启"):
@@ -165,6 +166,8 @@ class DarwinLifecycleTests(unittest.TestCase):
             guest(NAME, "device", "start")
             try:
                 if cycle == 1:
+                    qmp = guest(NAME, "doctor")["qmp"]
+                    self.assertIsInstance(qmp["query-migrate"], dict)
                     guest(NAME, "shell", "touch", marker)
                 else:
                     guest(NAME, "shell", "test", "-f", marker)

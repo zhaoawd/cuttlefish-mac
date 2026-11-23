@@ -6,6 +6,7 @@ from pathlib import Path
 import secrets
 import select
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -15,11 +16,26 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from cfctl import ROOT, Device
+from cfctl import ROOT, Device, live_snapshot
 from instance_store import clone, lock, snapshot, valid_name
+from phone import persistent_disk
 
 
 class StoreTests(unittest.TestCase):
+    def test_legacy_persistent_disk_stays_raw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            device = Device("original", 5)
+            device.directory = directory
+            raw = directory / "persistent.raw"
+            raw.touch()
+            self.assertEqual(persistent_disk(directory), (raw, "raw"))
+            with self.assertRaisesRegex(ValueError, "clone --clean"):
+                live_snapshot(device, "live-save", "test")
+            (directory / "persistent.qcow2").touch()
+            with self.assertRaisesRegex(ValueError, "两个"):
+                persistent_disk(directory)
+
     def test_partial_copy_not_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             device = Device("original", 30)
@@ -98,6 +114,45 @@ class BatchTests(unittest.TestCase):
                         break
                     time.sleep(1)
                 self.assertFalse((path / "qemu.pid").exists())
+
+    def test_running_snapshot_restores_ram_and_disks(self):
+        with ExitStack() as cleanup:
+            work = Path(tempfile.mkdtemp(prefix="cf-live-", dir="/private/tmp"))
+            def remove_work():
+                self.assertFalse((work / "vm/ram-test/qemu.pid").exists(), f"保留运行目录 {work}")
+                shutil.rmtree(work)
+            cleanup.callback(remove_work)
+            self.env = dict(os.environ, CF_INSTANCE_HOME=str(Path(work) / "vm"), CF_PHONE_DISPLAY="none")
+            name = "ram-test"
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = str(sock.getsockname()[1])
+            self.cli("recovered", "device", "clone", name, "--clean", "--port", port)
+            try:
+                self.cli(name, "device", "start")
+                def markers():
+                    return self.cli(name, "shell", "su", "0", "cat", "/proc/sys/kernel/random/boot_id",
+                                    "/dev/cf_ram", "/data/local/tmp/cf_disk").splitlines()
+
+                def write(value):
+                    self.cli(name, "shell", "su", "0", "sh", "-c",
+                             f"echo {value} > /dev/cf_ram && echo {value} > /data/local/tmp/cf_disk && sync")
+
+                original, changed = secrets.token_hex(16), secrets.token_hex(16)
+                write(original)
+                before = markers()
+                self.assertEqual(before[1:], [original, original])
+                self.cli(name, "snapshot", "live-save", "baseline")
+                self.assertEqual(self.cli(name, "snapshot", "live-list"), ["baseline"])
+                self.assertIn("已存在", self.cli(name, "snapshot", "live-save", "baseline", success=False)["error"])
+                write(changed)
+                self.assertEqual(markers(), [before[0], changed, changed])
+                self.cli(name, "snapshot", "live-restore", "baseline")
+                self.assertEqual(markers(), before)
+                self.cli(name, "snapshot", "live-delete", "baseline")
+                self.assertEqual(self.cli(name, "snapshot", "live-list"), [])
+            finally:
+                self.ensure_stopped(name)
 
     def test_parallel_devices_api_and_restore(self):
         with ExitStack() as cleanup:

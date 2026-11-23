@@ -2,6 +2,7 @@
 """按名称控制本机 Android 直启或 Cuttlefish 实例。"""
 import argparse
 import base64
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -18,8 +19,8 @@ import time
 import xml.etree.ElementTree as ET
 
 from cvd_host import CvdHost, NAME as CVD_NAME, tcp_listeners, run_directory
-from instance_store import LOCAL, clone, delete_clone, devices, snapshot
-from phone import ROOT, vm_running
+from instance_store import BUILTINS, LOCAL, OVERLAY, clone, delete_clone, devices, lock, snapshot, valid_name
+from phone import ROOT, disk_directory, persistent_disk, vm_running
 
 LOCAL_ADB = ["adb", "-H", "127.0.0.1", "-P", "5037"]
 
@@ -252,11 +253,10 @@ def serial_echo(directory, deadline):
     return False
 
 
-def qmp_status(path, timeout=3, *, include_kvm=False):
-    state = {}
-    deadline = time.monotonic() + timeout
+@contextmanager
+def qmp_connection(path, deadline):
     with socket.socket(socket.AF_UNIX) as conn:
-        conn.settimeout(timeout)
+        conn.settimeout(max(0.001, deadline - time.monotonic()))
         if len(os.fsencode(path)) >= 104:
             # Darwin 的 sockaddr_un.sun_path 只有 104 字节。
             with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
@@ -278,20 +278,81 @@ def qmp_status(path, timeout=3, *, include_kvm=False):
                 greeting = receive()
             if "QMP" not in greeting:
                 raise RuntimeError(f"无效 QMP 握手：{greeting}")
-            commands = ["qmp_capabilities", "query-status", "query-block"]
-            if include_kvm:
-                commands.append("query-kvm")
-            for cmd in commands:
-                conn.sendall(json.dumps({"execute": cmd, "id": cmd}).encode() + b"\n")
+            def execute(command, arguments=None):
+                request = {"execute": command, "id": command}
+                if arguments is not None:
+                    request["arguments"] = arguments
+                conn.sendall(json.dumps(request).encode() + b"\n")
                 while True:
                     msg = receive()
-                    if msg.get("id") == cmd:
+                    if msg.get("id") == command:
                         if "error" in msg:
-                            raise RuntimeError(str(msg["error"]))
-                        if cmd != "qmp_capabilities":
-                            state[cmd] = msg["return"]
-                        break
+                            raise RuntimeError(f"{command}: {msg['error']}")
+                        return msg["return"]
+
+            execute("qmp_capabilities")
+            yield execute
+
+
+def qmp_status(path, timeout=3, *, include_kvm=False):
+    with qmp_connection(path, time.monotonic() + timeout) as execute:
+        state = {cmd: execute(cmd) for cmd in ("query-status", "query-block")}
+        if include_kvm:
+            state["query-kvm"] = execute("query-kvm")
+        try:
+            state["query-migrate"] = execute("query-migrate")
+        except RuntimeError as exc:
+            state["query-migrate-error"] = str(exc)
     return state
+
+
+def live_snapshot(device, action, name):
+    if name is not None:
+        valid_name(name)
+    directory = device.directory
+    with lock(directory / "control.lock", deadline=device.deadline):
+        disks = disk_directory(directory)
+        persist, fmt = persistent_disk(disks)
+        if device.name in BUILTINS or fmt != "qcow2":
+            raise ValueError("运行中快照需要使用 device clone --clean 创建独立的 qcow2 实例")
+        if not device.status()["owns_port"]:
+            raise RuntimeError("所选直启实例未持有其 ADB 端口")
+        with qmp_connection(directory / ".control/qmp.sock", device.deadline) as execute:
+            if action in ("live-save", "live-restore") and not execute("query-status")["running"]:
+                raise RuntimeError("保存或恢复运行中快照需要 QEMU 处于 running 状态")
+            blocks = {b["device"]: b["inserted"] for b in execute("query-block") if "inserted" in b}
+            expected = {"os": disks / OVERLAY, "persist": persist}
+            if blocks.keys() != expected.keys():
+                raise RuntimeError("QMP 磁盘集合与所选直启实例不符")
+            tags = {}
+            for key, path in expected.items():
+                block = blocks[key]
+                if block["drv"] != "qcow2" or not path.samefile(block["file"]):
+                    raise RuntimeError("QMP 磁盘路径或格式与所选直启实例不符")
+                tags[key] = {s["name"]: s for s in block["image"].get("snapshots", [])}
+            if tags["os"].keys() != tags["persist"].keys():
+                raise RuntimeError("两个磁盘上的快照名称不一致，请保留磁盘并检查")
+            if action == "live-list":
+                return sorted(tags["os"])
+            exists = name in tags["os"]
+            if action == "live-save" and exists:
+                raise ValueError(f"快照已存在：{name}")
+            if action != "live-save" and not exists:
+                raise ValueError(f"找不到快照：{name}")
+            if action == "live-restore":
+                os_snap, persist_snap = tags["os"][name], tags["persist"][name]
+                clock = ("vm-clock-sec", "vm-clock-nsec", "date-sec", "date-nsec")
+                if (not any(s["vm-state-size"] for s in (os_snap, persist_snap))
+                        or any(os_snap[k] != persist_snap[k] for k in clock)):
+                    raise RuntimeError("快照缺少虚拟机状态，或两个磁盘的快照时间不一致")
+            commands = {"live-save": "savevm", "live-restore": "loadvm", "live-delete": "delvm"}
+            message = execute("human-monitor-command", {"command-line": f"{commands[action]} {name}"})
+            if message.strip():
+                raise RuntimeError(message.strip())
+        if action == "live-restore":
+            device.run([*LOCAL_ADB, "disconnect", device.serial], check=False)
+            device.ready(wait=True)
+    return {"device": device.name, "snapshot": name}
 
 
 def diagnose(device):
@@ -371,6 +432,8 @@ def execute(args, *, artifacts=None):
     d = Device(args.device, args.timeout)
     action = args.action
     if d.cvd:
+        if args.group == "snapshot" and action.startswith("live-"):
+            raise ValueError("运行中快照仅支持独立直启实例。请用 doctor 查看 CVD 的 query-migrate 结果")
         if args.group == "snapshot" or (args.group == "device" and action in ("clone", "delete")):
             raise ValueError("此操作仅适用于直启实例的磁盘布局")
         if args.group == "device" and action in ("start", "stop"):
@@ -397,6 +460,8 @@ def execute(args, *, artifacts=None):
             return d.ready(wait=True) if action == "start" else result
         return d.status() if action == "status" else d.ready(wait=True)
     if args.group == "snapshot":
+        if action.startswith("live-"):
+            return live_snapshot(d, action, getattr(args, "name", None))
         return snapshot(d, action, getattr(args, "name", None))
     if args.group == "doctor":
         return diagnose(d)
@@ -461,8 +526,8 @@ def parser():
     device["clone"].add_argument("name")
     device["clone"].add_argument("--port", type=int)
     device["clone"].add_argument("--clean", action="store_true")
-    snaps = actions("snapshot", "save list restore delete")
-    for cmd in ("save", "restore", "delete"):
+    snaps = actions("snapshot", "save list restore delete live-save live-list live-restore live-delete")
+    for cmd in ("save", "restore", "delete", "live-save", "live-restore", "live-delete"):
         snaps[cmd].add_argument("name")
     server = actions("api", "serve")["serve"]
     server.add_argument("--port", type=int, default=8765)

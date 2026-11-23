@@ -12,7 +12,7 @@ import tempfile
 import time
 import uuid
 
-from phone import ROOT, QEMU, disk_directory, vm_running
+from phone import ROOT, QEMU, disk_directory, persistent_disk, vm_running
 from prepare_phone import MIB, write_disk
 
 LOCAL = ROOT / ".local-cf"
@@ -75,14 +75,17 @@ def copy_disks(source, dest, device, clean=False):
     img = QEMU / "qemu-img"
     overlay = dest / OVERLAY
     if clean:
-        write_disk(dest / "persistent.raw", [("frp", MIB, None)])
+        with tempfile.TemporaryDirectory(dir=dest) as tmp:
+            raw = Path(tmp) / "persistent.raw"
+            write_disk(raw, [("frp", MIB, None)])
+            device.run([img, "convert", "-f", "raw", "-O", "qcow2", raw, dest / "persistent.qcow2"])
         device.run([img, "create", "-f", "qcow2", "-F", "qcow2", "-b", "system.qcow2", overlay])
     else:
         info = json.loads(device.run([img, "info", "--output=json", source / OVERLAY]))
         backing = info.get("backing-filename")
         if not backing or not (source / backing).samefile(source / "system.qcow2"):
             raise ValueError("写入层的基础镜像与实例目录不一致")
-        for name in (OVERLAY, "persistent.raw"):
+        for name in (OVERLAY, persistent_disk(source)[0].name):
             device.run(["/bin/cp", "-c", source / name, dest / name])
         if backing != "system.qcow2":
             device.run([img, "rebase", "-u", "-f", "qcow2", "-F", "qcow2", "-b", "system.qcow2", overlay])
