@@ -17,7 +17,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 
-from cvd_host import CvdHost, NAME as CVD_NAME, run_directory
+from cvd_host import CvdHost, NAME as CVD_NAME, tcp_listeners, run_directory
 from instance_store import LOCAL, clone, delete_clone, devices, snapshot
 from phone import ROOT, vm_running
 
@@ -75,8 +75,7 @@ class Device:
             owner = False
         if running and not self.cvd:
             pid = (self.directory / "qemu.pid").read_text().strip()
-            owner = pid in self.run(["/usr/sbin/lsof", "-nP", "-t", "-a", "-p", pid,
-                                     f"-iTCP:{self.port}", "-sTCP:LISTEN"], check=False).splitlines()
+            owner = tcp_listeners(self, self.port) == {pid}
         boot = False
         # 嵌套 Linux 首次启动时，ADB 已在线但拉起 shell 仍可能需要数秒。
         probe_timeout = 20 if self.cvd and self.name == "linux-1" else 2

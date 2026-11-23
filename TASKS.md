@@ -68,3 +68,7 @@
 - [x] 在独立 Darwin/HVF 和 Linux/KVM 实例 2 实测官方 14781626 → 14818820 A/B 更新、重启前取消更新、从 B 槽启动和快照合并。合并后普通 14781626 包返回 `kPayloadTimestampError (51)`，活动槽保持 B。两端报告位于 `.local-cf/radio-acceptance/ota-official-release/` 和 `.local-cf/radio-acceptance/linux-ota/`。
 - [x] Darwin 冷恢复后实际启动 14781626 A 槽，更新前写入的测试标记一致。Linux 在 14818820 B 槽的冷恢复测试中撤销了关机前对标记的修改。两个流程均保留了恢复前的写入层。
 - [x] macOS 完整实机套件运行 30 项，全部通过。随后增加的第 31 项离线回归复现默认 netsim.ini 指向旧进程的情况，验证按启动器记录选择端点、拒绝其他来宾。新版离线套件 22 项通过，9 项按硬件条件跳过。
+
+## Darwin 端口归属、运行中快照、Cocoa 退出诊断与远端 CI
+
+- [x] 修复 Darwin 端口归属查询。实机回归使用的 Python 3.13 执行 `netstat` 时退出码为 0，标准输出和标准错误均为空。直启实例与 `launch_cvd` 改用 `nettop` 查询监听 PID，分别核对 QEMU PID 和登记的 `run_cvd` 进程树。独立监听实测覆盖 IPv4、IPv6 同端口多 PID 和端口关闭。记录见 [端口复现](./.local-cf/followup/port-ownership-repro.log)。

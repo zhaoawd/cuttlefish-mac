@@ -76,15 +76,35 @@ class RoutingTests(unittest.TestCase):
 
     def test_foreign_listener_cannot_receive_app_command(self):
         device = cfctl.Device("original", 5)
+        header = ",state,\n"
+        listener = f"tcp6 ::1.{device.port}<->*.*,Listen,\n"
         with tempfile.TemporaryDirectory() as tmp:
             device.directory = Path(tmp)
             (device.directory / "qemu.pid").write_text("120")
             with patch.object(cfctl, "vm_running", return_value=True), \
-                    patch.object(device, "run", return_value="121"), \
-                    patch.object(device, "adb", return_value="device") as adb:
-                with self.assertRaises(RuntimeError):
-                    device.ready()
-                adb.assert_called_once_with("get-state", check=False, limit=2)
+                    patch("cvd_host.platform.system", return_value="Darwin"), \
+                    patch.object(device, "run") as run, patch.object(device, "adb") as adb:
+                run.return_value = header + "qemu.120,,\n" + listener
+                adb.side_effect = ["device", "1"]
+                self.assertTrue(device.ready()["owns_port"])
+                adb.side_effect = None
+                adb.return_value = "device"
+                foreign = "unrelated.121,,\n" + listener
+                for output in (header, header + foreign, header + "qemu.120,,\n" + listener + foreign):
+                    with self.subTest(output=output):
+                        run.return_value = output
+                        adb.reset_mock()
+                        with self.assertRaisesRegex(RuntimeError, "未就绪"):
+                            device.ready()
+                        adb.assert_called_once_with("get-state", check=False, limit=2)
+                for output, error in (("", "nettop 未返回 TCP 表头"),
+                                      (header + "unrelated.0,,\n" + listener, "监听进程 PID")):
+                    with self.subTest(output=output):
+                        run.return_value = output
+                        adb.reset_mock()
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            device.ready()
+                        adb.assert_not_called()
 
 
 @unittest.skipUnless(os.environ.get("CF_TEST_CLI") == "1", "需要两个已启动的直启实例及 Android SDK")

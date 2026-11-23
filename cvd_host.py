@@ -17,6 +17,42 @@ def run_directory():
     return Path(os.environ.get("CF_RUN", LOCAL / ("run-" + platform.system().lower()))).resolve()
 
 
+def tcp_listeners(device, port):
+    if platform.system() != "Darwin":
+        lsof = shutil.which("lsof") or "/usr/sbin/lsof"
+        return set(device.run([lsof, "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"],
+                              check=False).splitlines())
+    # netstat 的 TCP PCB 查询在部分宿主进程环境中会返回空表。
+    table = device.run(["/usr/bin/nettop", "-n", "-m", "tcp", "-L", "1", "-J", "state"], limit=3,
+                       env=dict(os.environ, LC_ALL="C"))
+    header, _, rows = table.partition("\n")
+    if header != ",state,":
+        detail = f"：{header}" if header else ""
+        raise RuntimeError(f"nettop 未返回 TCP 表头{detail}")
+    owners = set()
+    pid = ""
+    for line in rows.splitlines():
+        try:
+            label, state, _ = line.rsplit(",", 2)
+        except ValueError as exc:
+            raise RuntimeError("无法识别 nettop TCP 表的列") from exc
+        if not state:
+            # 每个进程的套接字行紧跟在 name.pid 之后。
+            pid = label.rpartition(".")[2]
+            continue
+        if state.casefold() != "listen":
+            continue
+        local, separator, _ = label.partition("<->")
+        if not separator:
+            raise RuntimeError("无法识别 nettop 的 TCP 监听地址")
+        if not local.endswith((f":{port}", f".{port}")):
+            continue
+        if not pid.isascii() or not pid.isdecimal() or int(pid) <= 0:
+            raise RuntimeError(f"nettop 未返回端口 {port} 的有效监听进程 PID")
+        owners.add(pid)
+    return owners
+
+
 class CvdHost:
     def __init__(self, directory):
         self.run = directory
@@ -42,41 +78,58 @@ class CvdHost:
             if config.get("instances_uds_dir"):
                 self.monitor = Path(config["instances_uds_dir"]) / "cvd-1/internal/qemu_monitor.sock"
 
+    def darwin_processes(self, device):
+        def pids(*args):
+            result = device.run(["/usr/bin/pgrep", *args], check=False, limit=3)
+            if any(not line.isdecimal() for line in result.splitlines()):
+                raise RuntimeError(f"pgrep 查询失败：{result}")
+            return set(result.splitlines())
+
+        listeners = tcp_listeners(device, self.port)
+        registry = Path(f"/tmp/cuttlefish_instances_{os.getuid()}.json")
+        members = set()
+        foreign = False
+        if registry.is_file():
+            entry = json.loads(registry.read_text()).get("instances", {}).get("1", {})
+            pid = str(entry.get("run_cvd_pid", ""))
+            if pid.isdecimal() and pid in pids("-x", "run_cvd"):
+                if Path(entry.get("config_path", "")).resolve() == self.config.resolve():
+                    members.add(pid)
+                else:
+                    foreign = True
+        children = members.copy()
+        while children:
+            children = pids("-P", ",".join(sorted(children)), ".") - members
+            members.update(children)
+        vm = bool(members and members & pids("-x", "qemu-system-aarch64"))
+        owner = bool(listeners) and listeners <= members
+        return dict(host_running=bool(members), qemu=vm, owns_port=owner,
+                    conflict=foreign or bool(listeners and not owner))
+
     def processes(self, device):
         # run_cvd、VM 和 ADB 代理属于同一棵进程树。端口和来宾序列号均可能复用。
+        if platform.system() == "Darwin":
+            return self.darwin_processes(device)
         rows = device.run(["ps", "-axo", "pid=,ppid=,comm="]).splitlines()
         procs = {}
         for line in rows:
             fields = line.strip().split(None, 2)
             if len(fields) == 3:
                 procs[fields[0]] = (fields[1], Path(fields[2]).name)
-        lsof = shutil.which("lsof") or "/usr/sbin/lsof"
-        listeners = set(device.run([lsof, "-nP", "-t", f"-iTCP:{self.port}", "-sTCP:LISTEN"],
-                                   check=False).splitlines())
+        listeners = tcp_listeners(device, self.port)
         roots = set()
         foreign = False
-        if platform.system() == "Darwin":
-            registry = Path(f"/tmp/cuttlefish_instances_{os.getuid()}.json")
-            if registry.is_file():
-                entry = json.loads(registry.read_text()).get("instances", {}).get("1", {})
-                pid = str(entry.get("run_cvd_pid", ""))
-                if procs.get(pid, ("", ""))[1] == "run_cvd":
-                    if Path(entry.get("config_path", "")).resolve() == self.config.resolve():
-                        roots.add(pid)
-                    else:
-                        foreign = True
-        else:
-            for pid, (_, process) in procs.items():
-                if process != "run_cvd":
-                    continue
-                try:
-                    directory = (Path("/proc") / pid / "cwd").readlink()
-                except (PermissionError, FileNotFoundError, ProcessLookupError):
-                    continue
-                if directory == self.directory:
-                    roots.add(pid)
-                elif directory.parts[-3:] == ("cuttlefish", "instances", "cvd-1"):
-                    foreign = True
+        for pid, (_, process) in procs.items():
+            if process != "run_cvd":
+                continue
+            try:
+                directory = (Path("/proc") / pid / "cwd").readlink()
+            except (PermissionError, FileNotFoundError, ProcessLookupError):
+                continue
+            if directory == self.directory:
+                roots.add(pid)
+            elif directory.parts[-3:] == ("cuttlefish", "instances", "cvd-1"):
+                foreign = True
 
         def belongs(pid):
             while pid in procs and pid != procs[pid][0]:

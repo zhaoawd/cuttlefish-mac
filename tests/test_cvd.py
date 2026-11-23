@@ -39,12 +39,25 @@ class CvdTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             host = CvdHost(Path(tmp))
             d = Mock()
-            d.run.side_effect = ["1 0 launchd\n77 1 unrelated", "77"]
+            d.run.return_value = ",state,\nunrelated.77,,\ntcp4 *:6520<->*:*,Listen,"
             with patch("cvd_host.platform.system", return_value="Darwin"), patch.object(Path, "is_file", return_value=False):
                 state = host.processes(d)
             self.assertTrue(state["conflict"])
             self.assertFalse(state["owns_port"])
             self.assertFalse(state["host_running"])
+
+    def test_darwin_listener_pid_and_registered_descendants(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = CvdHost(Path(tmp))
+            registry = json.dumps({"instances": {"1": {"config_path": str(host.config), "run_cvd_pid": 10}}})
+            d = Mock()
+            d.run.side_effect = [",state,\nadb.proxy.22,,\ntcp4 127.0.0.1:6520<->*:*,Listen,\n"
+                                 "unrelated.77,,\ntcp4 *:6521<->*:*,Listen,\n"
+                                 "tcp4 127.0.0.1:6520<->127.0.0.1:2222,Established,",
+                                 "10", "21", "22", "", "21"]
+            with patch("cvd_host.platform.system", return_value="Darwin"), \
+                    patch.object(Path, "is_file", return_value=True), patch.object(Path, "read_text", return_value=registry):
+                self.assertEqual(host.processes(d), dict(host_running=True, qemu=True, owns_port=True, conflict=False))
 
     def test_linux_instance_conflict_before_adb_listens(self):
         with tempfile.TemporaryDirectory() as tmp:
