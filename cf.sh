@@ -17,7 +17,12 @@ case ${1:-} in
   start)
     [[ -d "$run" ]] || fail "缺少运行目录 ${run}，请先解包 Darwin 宿主包和 ARM64 设备镜像。"
     qbin=$(cd "$qbin" && pwd -P)
+    if [[ -d "$run/.cfctl-reconnect" ]]; then
+      export CF_RECONNECT_QEMU_DIR="$qbin"
+      qbin="$root/darwin-reconnect"
+    fi
     cd "$run"
+    export CF_RUN="$PWD"
     for tool in bin/launch_cvd bin/assemble_cvd bin/run_cvd bin/vhost_device_vsock \
         bin/cf_vhost_user_input "$qbin/qemu-system-aarch64" "$qbin/qemu-img"; do
       [[ -x "$tool" ]] || fail "缺少可执行文件 $tool"

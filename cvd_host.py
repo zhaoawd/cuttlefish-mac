@@ -158,13 +158,20 @@ class CvdHost:
         env.pop("CUTTLEFISH_CONFIG_FILE", None)
         return env
 
-    def lifecycle(self, d, action):
+    def lifecycle(self, d, action, *, reconnect_snapshots=False, force=False):
         if not self.run.is_dir():
             raise ValueError(f"缺少宿主运行目录 {self.run}")
         with lock(self.run / ".cfctl-control.lock", deadline=d.deadline):
             state = self.processes(d)
             if state["conflict"]:
                 raise RuntimeError("实例号或 ADB 端口已被其他进程占用")
+            if reconnect_snapshots:
+                if platform.system() != "Darwin":
+                    raise ValueError("重连快照需要 Darwin CVD")
+                mode = self.run / ".cfctl-reconnect"
+                if state["host_running"] and not mode.is_dir():
+                    raise ValueError("启用重连快照前请先正常关闭实例")
+                mode.mkdir(mode=0o700, exist_ok=True)
             if action == "start":
                 # 使用当前用户的 ADB 密钥，包括从节点重启或宿主已启动的状态恢复时。
                 d.run(["adb", "-L", "tcp:localhost:5037", "start-server"], env=self.client_environment())
@@ -205,24 +212,28 @@ class CvdHost:
                         raise RuntimeError(f"launch_cvd 启动失败，见 {out.name}")
                     d.bind_cvd(CvdHost(self.run))
                 return d.ready(wait=True)
-            identity = d.status()
-            if (identity["conflict"] or not identity["host_running"] or not identity["qemu"]
-                    or not identity["owns_port"] or not identity.get("serial_matches")):
-                raise RuntimeError(f"{d.name} 的 ADB 未就绪：{identity}")
-            log = self.directory / "logs/kernel.log"
-            with log.open("rb") as stream:
-                stream.seek(0, os.SEEK_END)
-                try:
-                    d.adb("shell", "su", "0", "reboot", "-p", check=False, limit=30)
-                except subprocess.TimeoutExpired:
-                    # 关机可能已提交，继续等待本次内核关机记录。
-                    pass
-                data = b""
-                while b"reboot: Power down" not in data:
-                    if time.monotonic() >= d.deadline:
-                        raise TimeoutError("本次来宾关机未收到 Power down，保留宿主")
-                    data = data[-256:] + stream.read()
-                    time.sleep(0.1)
+            if force:
+                if not state["host_running"]:
+                    raise RuntimeError("未找到所选 Cuttlefish 宿主进程")
+            else:
+                identity = d.status()
+                if (identity["conflict"] or not identity["host_running"] or not identity["qemu"]
+                        or not identity["owns_port"] or not identity.get("serial_matches")):
+                    raise RuntimeError(f"{d.name} 的 ADB 未就绪：{identity}")
+                log = self.directory / "logs/kernel.log"
+                with log.open("rb") as stream:
+                    stream.seek(0, os.SEEK_END)
+                    try:
+                        d.adb("shell", "su", "0", "reboot", "-p", check=False, limit=30)
+                    except subprocess.TimeoutExpired:
+                        # 关机可能已提交，继续等待本次内核关机记录。
+                        pass
+                    data = b""
+                    while b"reboot: Power down" not in data:
+                        if time.monotonic() >= d.deadline:
+                            raise TimeoutError("本次来宾关机未收到 Power down，保留宿主")
+                        data = data[-256:] + stream.read()
+                        time.sleep(0.1)
             cmd = [self.run / "bin/stop_cvd"]
             env = self.environment()
             if platform.system() == "Darwin":
@@ -233,7 +244,10 @@ class CvdHost:
             while True:
                 after = self.processes(d)
                 if not after["host_running"] and not after["owns_port"] and not after["conflict"]:
-                    return {"guest_shutdown": True, "host_running": False, "port_closed": True}
+                    result = {"guest_shutdown": not force, "host_running": False, "port_closed": True}
+                    if force:
+                        result["forced"] = True
+                    return result
                 if time.monotonic() >= d.deadline:
                     raise TimeoutError("等待 Cuttlefish 宿主停止超时")
                 time.sleep(0.2)

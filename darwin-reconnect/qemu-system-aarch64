@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""为 Darwin CVD 重连快照配置热插拔端口和持久分区写入盘。"""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+qemu = Path(os.environ["CF_RECONNECT_QEMU_DIR"])
+ports = {"vhost-user-input-pci": ("input", 1), "vhost-user-vsock-pci": ("vsock", 2),
+         "virtio-sound-pci": ("sound", 3)}
+args = []
+for arg in sys.argv[1:]:
+    fields = arg.split(",")
+    if args and args[-1] == "-device" and fields[0] in ports:
+        name, slot = ports[fields[0]]
+        args.extend([f"pcie-root-port,id=rp-{name},chassis={slot},slot={slot}", "-device",
+                     f"{arg},bus=rp-{name},id=cf-{name}"])
+    elif args and args[-1] == "-drive" and "id=drive-virtio-disk1" in fields:
+        run = Path(os.environ["CF_RUN"]).resolve()
+        source = run / "cuttlefish/instances/cvd-1/persistent_composite.img"
+        disk = run / ".cfctl-reconnect/persistent.qcow2"
+        if f"file={source}" not in fields:
+            sys.exit("持久分区与实例 1 的运行目录不符")
+        if not disk.exists():
+            with tempfile.TemporaryDirectory(dir=disk.parent) as tmp:
+                converted = Path(tmp) / "persistent.qcow2"
+                subprocess.run([qemu / "qemu-img", "convert", "-f", "raw", "-O", "qcow2", source, converted],
+                               check=True)
+                os.link(converted, disk)
+        args.append(",".join([f"file={disk}" if field.startswith("file=") else field
+                              for field in fields if not field.startswith("format=")] + ["format=qcow2"]))
+    else:
+        args.append(arg)
+os.execv(qemu / "qemu-system-aarch64", [str(qemu / "qemu-system-aarch64"), *args])

@@ -82,11 +82,21 @@
 
 ### 后续独立特性
 
-Darwin `launch_cvd` 运行中整机快照尚未通过。宿主挂起路径要求 crosvm；QEMU 报告两个 vhost-user 后端缺少 `LOG_SHMFD`，并列出 virtio-sound、vhost-user-vsock 和 vhost-user-input 的迁移限制。现有流程支持关机磁盘恢复。当使用场景要求恢复内存并保持外设连接时，再验证设备和后端的状态恢复。证据见 `.local-cf/radio-acceptance/qmp-migration.json`。
+默认设备配置的 Darwin `launch_cvd` 运行中整机快照尚未通过。宿主挂起路径要求 crosvm；QEMU 报告两个 vhost-user 后端缺少 `LOG_SHMFD`，并列出 virtio-sound、vhost-user-vsock 和 vhost-user-input 的迁移限制。现有流程支持关机磁盘恢复。当使用场景要求恢复内存并保持外设连接时，再验证设备和后端的状态恢复。证据见 `.local-cf/radio-acceptance/qmp-migration.json`。
+
+2026-11-24 在新组装的实例 2 上运行 `python3 -B tests/vsock_snapshot.py --run RUN_DIR`。同一条 ADB-over-vsock 流在保存请求前后依次读回序号 1、2，并校验了各自的随机数据。`savevm` 返回 `State blocked by non-migratable device`，指出 vhost-user-input。探针在保存被拒绝时返回 2；只有保存、恢复及原连接恢复后序号验证均通过时才返回 0。另用 128 MiB HVF 实例、临时 qcow2 和单独的 vhost-user-vsock 设备复测，保存被 vsock 设备自身拒绝，QMP 同时报告后端缺少 LOG_SHMFD。相同的 128 MiB 对照实例移除 vsock 后，保存和加载均成功，记录在 `.local-cf/vsock-control-result.json`。CVD 恢复后的连接状态尚未验证。两组带 vsock 的记录分别在 `.local-cf/vsock-probe-result.json` 和 `.local-cf/vsock-only-result.json`。
+
+使用 `python3 -B tests/vsock_minimal.py` 可重复运行 128 MiB HVF 对照实验。脚本另行启动同一版本的独立后端，查询 `VHOST_USER_GET_PROTOCOL_FEATURES`。本机返回 `0x200`，未公布 `LOG_SHMFD` 或 `DEVICE_STATE`。无 vsock 组保存和加载成功，带 vsock 组在保存时被拒绝，脚本退出码为 2。记录见 `.local-cf/vsock-minimal-result.json`。QEMU 的内核 vhost-vsock 实现在加载后通过公共函数安排 transport reset，当前 vhost-user-vsock 实现没有注册该恢复函数。方案 A 允许恢复后重新建立 vsock 和 ADB 连接。
+
+2026-11-24 在独立的 Darwin CVD 实例 2 上验证了方案 A。实验启动器将 vsock、声卡和键盘分别接到热插拔端口。在保存和加载时，来宾完成设备拔除，QEMU 暂时使用三个 qcow2 写入层。保存后写入新标记，加载后重新枚举设备并通过新 ADB 会话读回数据。启动标识、tmpfs 和 userdata 标记均恢复；保存和加载前各自打开的 ADB 流均已关闭。加载后新建的 AudioTrack 播放了 16000 帧，Android 重新列出 vhost-user 键盘。实验未验证跨快照保持播放、按键状态或宿主其他无线连接。实验记录见 `.local-cf/reconnect/verified.json`、`audio.log` 和 `input.log`（同目录）。
+
+正式 CLI 已支持在专用 Darwin CVD 实例 1 上用 `device start --reconnect-snapshots` 启用此模式，并支持在来宾暂停时通过 `device stop --force` 经 `stop_cvd` 强制停机。2026-11-24 通过 `tests/reconnect_snapshot.py` 完成实机回归。保存后正常关机，重新启动 CVD，加载同名快照后，来宾启动标识、内存和磁盘标记均恢复。保存和加载均关闭旧 ADB 会话，新连接可执行命令。同名保存和加载已删除快照均被拒绝。记录见 `.local-cf/cli-reconnect/result.json`。
 
 ### 已知问题
 
 00:14 的两次 Cocoa 退出已定位到 AppKit 确认退出。第二个实例此前获得键盘焦点，并出现一次 Apple Event 端口查询。发送方未查明。需要调查复发时，在启动前设置 `CF_COCOA_QUIT_TRACE=1`，检查 `qemu.log` 中的退出路径和可用的发送 PID。
+
+2026-11-24 在独立无磁盘 Cocoa 实例上实测关闭窗口并点击 Cancel。日志记录 `action=window-close` 和 `decision=cancel`，随后 QMP 仍报告 `prelaunch`。同批定向 Apple Event 发送 PID 回归也通过。历史退出原因未查明。
 
 ### macOS 完整实机回归
 

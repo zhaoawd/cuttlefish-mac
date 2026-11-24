@@ -131,7 +131,7 @@ python3 -B cfctl.py --device qa-one snapshot live-delete before-install
 
 直启实例加载运行中快照失败时，先执行 `doctor` 查看 `result.qmp.query-status`（使用全局参数 `--json`）。如果来宾已暂停，使用 `device stop --force` 让 QEMU 退出。该命令跳过 Android 关机，未写入磁盘的数据可能丢失。随后可用 `snapshot restore NAME` 恢复已有的关机磁盘快照，再用 `device start` 启动。普通 `device stop` 仍请求 Android 正常关机。
 
-保留 `persistent.raw` 的已有实例可继续使用关机磁盘快照。Darwin `launch_cvd` 的 QEMU 配置包含会阻止迁移的设备。在运行实例上执行 `cfctl.py --device darwin-1 --json doctor`，可从 `result.qmp.query-migrate.blocked-reasons` 查看 QEMU 报告的原因。该字段为空仅表示 QEMU 未报告迁移阻碍。已有的 CVD 冷恢复验收单独验证关机后的磁盘恢复。
+保留 `persistent.raw` 的已有实例可继续使用关机磁盘快照。Darwin `launch_cvd` 的默认 QEMU 配置包含会阻止迁移的设备。需要运行中快照且允许外设断开时，可按下文启用 `--reconnect-snapshots`。在运行实例上执行 `cfctl.py --device darwin-1 --json doctor`，可从 `result.qmp.query-migrate.blocked-reasons` 查看 QEMU 报告的原因。该字段为空仅表示 QEMU 未报告迁移阻碍。已有的 CVD 冷恢复验收单独验证关机后的磁盘恢复。
 
 ### HTTP 和 WebSocket API
 
@@ -238,7 +238,7 @@ python3 -B cfctl.py --device darwin-1 device stop
 
 在固定版本 QEMU 源码的空构建目录中配置。需要 Python、Ninja、pkg-config、GLib、Pixman 和 Xcode 的 `Rez`、`SetFile`。所选源码包含 Meson wheel，Meson 可通过源码的 wrap 文件获取其余子项目。
 
-构建前在 QEMU 源码根目录执行 `patch -p1 < "$PROJECT/patches/qemu-cocoa-quit-trace.patch"`，其中 `PROJECT` 指向本仓库。启动实例时设置 `CF_COCOA_QUIT_TRACE=1` 可记录 Cocoa 退出请求。直启实例将记录写入 `qemu.log`。窗口关闭路径记录 `action=window-close`，退出 Apple Event 提供发送 PID 时记录 `sender_pid`，通用退出路径记录 `request=terminate`。确认框返回后记录 `decision=quit` 或 `decision=cancel`。可用 `CF_TEST_COCOA_TRACE=1 python3 -B -m unittest discover -s tests -p test_cocoa.py -v` 验证独立无磁盘实例收到的发送 PID。
+构建前在 QEMU 源码根目录执行 `patch -p1 < "$PROJECT/patches/qemu-cocoa-quit-trace.patch"`，其中 `PROJECT` 指向本仓库。启动实例时设置 `CF_COCOA_QUIT_TRACE=1` 可记录 Cocoa 退出请求。直启实例将记录写入 `qemu.log`。窗口关闭路径记录 `action=window-close`，退出 Apple Event 提供发送 PID 时记录 `sender_pid`，通用退出路径记录 `request=terminate`。确认框返回后记录 `decision=quit` 或 `decision=cancel`。可用 `CF_TEST_COCOA_TRACE=1 python3 -B -m unittest discover -s tests -p test_cocoa.py -v` 验证独立无磁盘实例收到的发送 PID；追加 `CF_TEST_COCOA_WINDOW=1` 可同时验证关闭窗口后点击 Cancel 时的日志和 QMP 响应（窗口用例需要宿主授予测试进程 macOS 辅助功能权限）。
 
 ```sh
 "$QEMU_SRC/configure" --prefix="$QEMU_PREFIX" --target-list=aarch64-softmmu \
@@ -444,7 +444,25 @@ bash tests/ota_host.sh stop "$OTA_CVD_RUN"
 
 升级用例从 14781626 的 A 槽开始。它先应用新包，确认下次启动槽为 B，再用 `--reset_status` 恢复 A。第二次应用后重启，核对新指纹、实际槽位和 Virtual A/B 合并状态。旧包用例验证 Android 对普通旧版 OTA 的处理，`downgrade_rejected` 表示更新引擎返回 `kPayloadTimestampError` 且保留当前启动槽。
 
-Darwin 运行中整机快照仍受宿主和设备模型限制。当前 Cuttlefish 的挂起路径要求 crosvm。专用 QEMU 实例的 `query-migrate` 还报告 virtio-sound、vhost-user-vsock 和 vhost-user-input 不可迁移，两个后端缺少 `VHOST_USER_PROTOCOL_F_LOG_SHMFD`。磁盘冷备份需要先正常关闭来宾和宿主。
+### Darwin CVD 运行中快照
+
+在 Apple Silicon 上，为已解包、已停机的专用实例 1 设置 `CF_RUN`。第一次启动时加上 `--reconnect-snapshots`。此后，同一运行目录执行普通 `device start` 会继续使用该配置。
+
+```sh
+export CF_RUN="$RECONNECT_RUN"
+python3 -B cfctl.py --device darwin-1 device start --reconnect-snapshots
+python3 -B cfctl.py --device darwin-1 snapshot live-save before-update
+python3 -B cfctl.py --device darwin-1 snapshot live-list
+python3 -B cfctl.py --device darwin-1 snapshot live-restore before-update
+python3 -B cfctl.py --device darwin-1 snapshot live-delete before-update
+python3 -B cfctl.py --device darwin-1 device stop
+```
+
+保存和恢复都临时拔除 vsock、声卡和键盘，已有 ADB 会话会断开。CLI 等待新 ADB 连接就绪后才返回成功。快照包含来宾内存和三个可写磁盘。持久分区首次启动时转换为 `.cfctl-reconnect/persistent.qcow2`，随后持续写入该文件。备份时将整个运行目录作为一组保留。删除 `.cfctl-reconnect/` 会丢失新版持久分区，并导致其余磁盘与原始持久分区的状态可能不一致。
+
+设备重新连接失败时，用 `doctor` 查看 QEMU 状态。QEMU 仍在运行时可执行 `snapshot live-reconnect` 重试。即使三个磁盘的快照名称不一致，也可以单独重连外设。名称不一致时，快照操作会报错，请保留三个磁盘供检查。如果加载失败且 QEMU 已暂停，保留磁盘，确认 `CF_RUN` 指向本次实例后执行 `python3 -B cfctl.py --device darwin-1 device stop --force` 通过 `stop_cvd` 停止宿主。此操作跳过来宾正常关机，可能丢失未落盘的数据。不要对部分恢复的内存执行 `cont`。
+
+实机回归使用专用实例 1，会启停实例并创建和删除测试快照。用 `python3 -B tests/reconnect_snapshot.py --run "$RECONNECT_RUN"` 复跑。该用例检查跨 CVD 进程重启的快照恢复、来宾启动标识、内存与磁盘标记，以及保存和恢复时的 ADB 重连。已按住的按键、正在播放的音频和其他无线连接的连续性未经验证。
 
 在 Darwin 专用实例上复验磁盘冷恢复时，先在 A 槽写入测试标记，正常关闭 Android，等待 kernel.log 出现 `reboot: Power down`，然后对实例 2 执行 `stop_cvd` 并确认 6521 已关闭。在同一 APFS 卷用 `cp -cp` 复制 `cuttlefish_runtime.2` 下的 `overlay.img`、`persistent_composite_overlay.img` 和 `sdcard_overlay.img`。保留原运行目录与基盘路径。完成升级和合并后再次正常关机，将升级后的三个写入层移到另一个空目录，再将同一次冷备份的三个文件复制回原路径。启动后同时核对 `sys.boot_completed`、构建指纹、槽位与测试标记。
 

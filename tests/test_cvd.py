@@ -104,6 +104,26 @@ class CvdTests(unittest.TestCase):
                 self.assertTrue(host.lifecycle(device, "stop")["guest_shutdown"])
                 self.assertEqual(run.call_args.args[0][0], host.run / "bin/stop_cvd")
 
+    def test_force_stop_runs_stop_cvd_without_adb_and_checks_ownership(self):
+        with tempfile.TemporaryDirectory() as tmp, patch("cfctl.run_directory", return_value=Path(tmp)):
+            online = dict(conflict=False, host_running=True, qemu=True, owns_port=True)
+            offline = dict(conflict=False, host_running=False, qemu=False, owns_port=False)
+            conflict = dict(conflict=True, host_running=True, qemu=True, owns_port=False)
+            with patch.object(CvdHost, "processes", side_effect=[online, offline]), \
+                    patch.object(cfctl.Device, "adb") as adb, patch.object(cfctl.Device, "run") as run:
+                result = cfctl.execute(cfctl.parser().parse_args(["--device", NAME, "device", "stop", "--force"]))
+            self.assertEqual(result, {"forced": True, "guest_shutdown": False,
+                                      "host_running": False, "port_closed": True})
+            adb.assert_not_called()
+            self.assertEqual(run.call_args.args[0][0], Path(tmp) / "bin/stop_cvd")
+
+            for state, pattern in ((offline, "宿主进程"), (conflict, "其他进程")):
+                with self.subTest(state=state), patch.object(CvdHost, "processes", return_value=state), \
+                        patch.object(cfctl.Device, "run") as run:
+                    with self.assertRaisesRegex(RuntimeError, pattern):
+                        cfctl.execute(cfctl.parser().parse_args(["--device", NAME, "device", "stop", "--force"]))
+                    run.assert_not_called()
+
     def test_tcg_launcher_preserves_disk_arguments(self):
         with tempfile.TemporaryDirectory() as tmp:
             binary = Path(tmp) / "bin/aarch64-linux-gnu/qemu/qemu-system-aarch64"
@@ -116,6 +136,18 @@ class CvdTests(unittest.TestCase):
             proc = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
             self.assertEqual(proc.stdout.splitlines(),
                              ["-accel", "tcg,thread=multi", "-cpu", "max", "-drive", "file=a b.img"])
+
+    def test_reconnect_mode_requires_stopped_darwin_instance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = CvdHost(Path(tmp))
+            state = {"conflict": False, "host_running": True}
+            with patch.object(host, "processes", return_value=state), patch("cvd_host.platform.system", return_value="Darwin"):
+                with self.assertRaisesRegex(ValueError, "先正常关闭"):
+                    host.lifecycle(Mock(), "start", reconnect_snapshots=True)
+            with patch.object(host, "processes", return_value=state), patch("cvd_host.platform.system", return_value="Linux"):
+                with self.assertRaisesRegex(ValueError, "Darwin"):
+                    host.lifecycle(Mock(), "start", reconnect_snapshots=True)
+            self.assertFalse((host.run / ".cfctl-reconnect").exists())
 
     def test_direct_disk_commands_refuse_cvd(self):
         for argv in (["device", "delete"], ["device", "clone", "bad"], ["snapshot", "save", "bad"],

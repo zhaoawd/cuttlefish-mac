@@ -461,11 +461,19 @@ def execute(args, *, artifacts=None):
     action = args.action
     if args.group == "device" and action == "stop" and args.force:
         if d.cvd:
-            raise ValueError("强制停机仅支持直启实例")
+            return d.cvd.lifecycle(d, action, force=True)
         return force_stop(d)
+    if args.group == "device" and action == "start" and args.reconnect_snapshots:
+        if not d.cvd:
+            raise ValueError("该选项仅用于 Darwin CVD")
+        return d.cvd.lifecycle(d, action, reconnect_snapshots=True)
     if d.cvd:
         if args.group == "snapshot" and action.startswith("live-"):
-            raise ValueError("运行中快照仅支持独立直启实例。请用 doctor 查看 CVD 的 query-migrate 结果")
+            if d.name == "darwin-1" and (d.cvd.run / ".cfctl-reconnect").is_dir():
+                from cvd_snapshot import operate
+                return operate(d, action, getattr(args, "name", None), qmp_connection)
+
+            raise ValueError("需要独立直启实例，或使用 device start --reconnect-snapshots 启用的 Darwin CVD")
         if args.group == "snapshot" or (args.group == "device" and action in ("clone", "delete")):
             raise ValueError("此操作仅适用于直启实例的磁盘布局")
         if args.group == "device" and action in ("start", "stop"):
@@ -492,6 +500,8 @@ def execute(args, *, artifacts=None):
             return d.ready(wait=True) if action == "start" else result
         return d.status() if action == "status" else d.ready(wait=True)
     if args.group == "snapshot":
+        if action == "live-reconnect":
+            raise ValueError("live-reconnect 仅用于 Darwin CVD 重连快照")
         if action.startswith("live-"):
             return live_snapshot(d, action, getattr(args, "name", None))
         return snapshot(d, action, getattr(args, "name", None))
@@ -555,11 +565,12 @@ def parser():
         return {cmd: subs.add_parser(cmd) for cmd in commands.split()}
 
     device = actions("device", "list status wait start stop clone delete")
-    device["stop"].add_argument("--force", action="store_true", help="通过 QMP 退出直启实例，跳过 Android 关机")
+    device["start"].add_argument("--reconnect-snapshots", action="store_true", help="为此 Darwin CVD 运行目录启用重连快照")
+    device["stop"].add_argument("--force", action="store_true", help="跳过 Android 关机并强制停止实例")
     device["clone"].add_argument("name")
     device["clone"].add_argument("--port", type=int)
     device["clone"].add_argument("--clean", action="store_true")
-    snaps = actions("snapshot", "save list restore delete live-save live-list live-restore live-delete")
+    snaps = actions("snapshot", "save list restore delete live-save live-list live-restore live-delete live-reconnect")
     for cmd in ("save", "restore", "delete", "live-save", "live-restore", "live-delete"):
         snaps[cmd].add_argument("name")
     server = actions("api", "serve")["serve"]
