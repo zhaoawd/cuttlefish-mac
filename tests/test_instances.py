@@ -3,6 +3,7 @@ from contextlib import ExitStack
 import json
 import mmap
 import os
+import runpy
 from pathlib import Path
 import secrets
 import select
@@ -23,6 +24,18 @@ from phone import persistent_disk
 
 
 class StoreTests(unittest.TestCase):
+    def test_linked_lab_resolves_builtin_instance_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "source"
+            checkout.mkdir()
+            lab = Path(tmp) / "lab"
+            lab.mkdir()
+            (checkout / ".local-cf").symlink_to(lab)
+            with patch("phone.ROOT", checkout):
+                entries = runpy.run_path(str(ROOT / "instance_store.py"))["BUILTINS"]
+            self.assertEqual(entries["recovered"][0], lab.resolve() / "phone-recovered")
+            self.assertEqual(entries["original"][0], lab.resolve() / "aosp-volume/phone")
+
     def test_force_stop_rejects_foreign_listener_and_qmp_disks(self):
         with tempfile.TemporaryDirectory() as tmp:
             device = Device("original", 5)

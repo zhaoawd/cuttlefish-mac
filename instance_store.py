@@ -15,7 +15,7 @@ import uuid
 from phone import ROOT, QEMU, disk_directory, persistent_disk, vm_running
 from prepare_phone import MIB, write_disk
 
-LOCAL = ROOT / ".local-cf"
+LOCAL = (ROOT / ".local-cf").resolve()
 BUILTINS = {"original": (LOCAL / "aosp-volume/phone", 16521),
             "recovered": (LOCAL / "phone-recovered", 16522)}
 BASE = ("kernel", "initrd", "system.qcow2")
