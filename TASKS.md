@@ -43,7 +43,6 @@
 - [x] 在独立实例上验证 Cocoa、无窗口启动、设置页、截图、上一次串口日志保留和正常关机。双实例 PID、ADB、串口和 QMP 的 120 秒定时采样通过。
 - [x] 在独立 Linux 运行目录复验嵌套 KVM 首次启动。使用 2 MiB hugetlbfs 映射 3072 MiB 来宾 RAM 后，同一 CI 镜像完成首启、六项应用回归和正常关机。仓库 CLI 重启后连续三轮对照通过，报告在 `.local-cf/residual/kvm-release*.json`。
 - [x] 添加 macOS/Linux 离线测试工作流，并在两种宿主本地运行同一测试命令。Mac 启用各项实机条件后的 22 项回归全部通过，记录位于 `.local-cf/residual/macos-full.log`。
-- [ ] 远端 CI 执行、自托管 runner 注册与实际调度尚未验收。手动工作流及本地硬件入口已有本机验证记录。
 
 ## 真实 APK 与 Unicode 输入
 
@@ -59,7 +58,6 @@
 - [x] 无磁盘 Recovery 在 Darwin/HVF 和 Linux/KVM 通过 ADB 核验。配套 U-Boot 在两端均通过 Fastboot/UDP 只读查询 `is-userspace: no`。独立测试日志位于 `.local-cf/local-acceptance/*-fastboot-release.log`。
 - [x] 串行硬件入口在两端完成启动、真实应用回归、设备检查和正常关机。两端报告经本地比较通过；actionlint 检查两份工作流通过。Mac 全量 unittest 的 26 项零跳过，新增的第 27 项 Fastboot 在同机单独通过。
 - [x] U-Boot 设置 `serverip=10.0.2.2` 后，Darwin/HVF 与 Linux/KVM 均在 SLIRP 回环转发上通过 Fastboot/TCP 和 UDP 查询。Linux 独立 TAP 的 IPv4、IPv6 TCP 也通过。原厂 Recovery 从临时 misc 分区读取 `boot-fastboot` 后，在两端返回 `is-userspace: yes`。
-- [ ] Darwin Cuttlefish 的运行中整机快照尚不支持。宿主挂起路径要求 crosvm，正在运行的实例 2 的 QMP `query-migrate` 报告 virtio-sound、vhost-user-vsock、vhost-user-input 不可迁移，两个后端缺少 LOG_SHMFD。证据在 `.local-cf/radio-acceptance/qmp-migration.json`。
 - [x] Darwin/HVF 与本机 Linux/KVM 在 VirtWifi 上完成本地 TCP 双向收发。APK 使用 Wi-Fi Network，双方校验独立的 64 字节随机数据并核对 wlan0 源地址。每端恢复原有 Wi-Fi 开关、关联状态和已保存网络列表。正式报告位于 `.local-cf/wifi-data/job-{darwin,linux}/platform/result.json`。Linux 验收显式选择 virt_wifi，原有 mac80211_hwsim 模式仍用于常规启动。
 - [x] 修复 Darwin 宿主的 RIL 默认地址被空值覆盖的问题。修复前来宾蜂窝 IPv4 为 `255.255.255.255/31`；修复后为 `10.0.2.15/24`，Linux TAP 来宾为 `192.168.97.2/30`。两端分别通过明确绑定蜂窝 Network 的双向 TCP 校验。
 - [x] 两端使用本地调制解调器控制套接字发起模拟来电。来宾经历空闲、振铃、摘机和空闲，模拟对端收到 Android 接听响应。语音媒体质量未测。
@@ -73,12 +71,22 @@
 
 - [x] 修复 Darwin 端口归属查询。实机回归使用的 Python 3.13 执行 `netstat` 时退出码为 0，标准输出和标准错误均为空。直启实例与 `launch_cvd` 改用 `nettop` 查询监听 PID，分别核对 QEMU PID 和登记的 `run_cvd` 进程树。独立监听实测覆盖 IPv4、IPv6 同端口多 PID 和端口关闭。记录见 [端口复现](./.local-cf/followup/port-ownership-repro.log)。
 - [x] 在 Apple Silicon 上用两个 qcow2 可写磁盘启动独立 Android 直启实例。QEMU 9.2.3 保存 2.82 GiB 虚拟机状态。修改来宾 tmpfs 和 userdata 中的随机标记后恢复，启动标识与两个标记均等于保存时的值。正式 CLI 回归还验证同名冲突、快照列举、删除、ADB 重连和正常关机。
-- [ ] 验证运行中快照加载失败后的处理。QEMU 9.2.3 的 `loadvm` 在加载前暂停虚拟机，仅在加载成功后恢复运行。需要用损坏的快照复现失败路径，核对 `doctor` 报告的状态并明确恢复步骤。
+- [x] 2026-11-24 在独立 Darwin/HVF 直启克隆上损坏内部快照的 VM 状态流头，再通过 CLI 加载。QEMU 报错，`doctor` 读回 `running: false`。`device stop --force` 经 QMP 退出 QEMU，确认进程退出、PID 文件消失和端口关闭。恢复此前的关机磁盘快照后，Android 正常启动，测试标记恢复。回归用例为 `tests/test_instances.py` 的 `test_failed_loadvm_can_force_stop_and_restore_offline`。
 - [x] `doctor` 读取 QMP `query-migrate`。本机 Linux ARM64 节点确认嵌套 KVM 已启用，报告 vhost-user 后端和输入设备的迁移阻碍，随后完成 Android 正常关机。记录位于 `.local-cf/followup/linux.log`。
-- [ ] Darwin `launch_cvd` 整机运行中快照尚未通过。已有 QMP 报告明确列出 vhost-user 后端缺少 `LOG_SHMFD`、virtio-sound、vhost-user-vsock 和 vhost-user-input。需要为这些设备及对应后端保存、恢复状态，并验证恢复后的连接和输入，再验收整机。现有 CVD 冷恢复流程可继续使用。
 - [x] 为 Cocoa 增加可选退出诊断。独立无磁盘实例收到定向退出 Apple Event，记录的发送 PID 与测试进程一致。记录位于 `.local-cf/followup/cocoa-test.log`。
-- [ ] 00:14 两次历史退出已定位到 AppKit 确认退出。针对两个 QEMU PID 检查的系统日志中，第二个实例在退出前获得键盘焦点，并有一次 Apple Event 端口查询。这些记录没有给出退出请求的发送方。
-- [ ] GitHub Actions 只读 API 返回 0 个已登记工作流、0 个仓库级 runner。远端硬件验收需要默认分支上的工作流、具备指定标签和测试资源的 runner，以及一次实际调度。
+
+### 后续验收
+
+- [ ] 在 GitHub 托管的 macos-15 和 ubuntu-24.04 上运行 `tests.yml`，以同一次推送的两个作业均通过为验收条件。
+- 自托管硬件验收推迟至需要远端调度或有专用实验机时。届时注册双端 ARM64 runner，手动运行 `hardware.yml` 并核对报告比较作业。
+
+### 后续独立特性
+
+Darwin `launch_cvd` 运行中整机快照尚未通过。宿主挂起路径要求 crosvm；QEMU 报告两个 vhost-user 后端缺少 `LOG_SHMFD`，并列出 virtio-sound、vhost-user-vsock 和 vhost-user-input 的迁移限制。现有流程支持关机磁盘恢复。当使用场景要求恢复内存并保持外设连接时，再验证设备和后端的状态恢复。证据见 `.local-cf/radio-acceptance/qmp-migration.json`。
+
+### 已知问题
+
+00:14 的两次 Cocoa 退出已定位到 AppKit 确认退出。第二个实例此前获得键盘焦点，并出现一次 Apple Event 端口查询。发送方未查明。需要调查复发时，在启动前设置 `CF_COCOA_QUIT_TRACE=1`，检查 `qemu.log` 中的退出路径和可用的发送 PID。
 
 ### macOS 完整实机回归
 

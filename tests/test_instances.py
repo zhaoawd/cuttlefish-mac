@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import json
+import mmap
 import os
 from pathlib import Path
 import secrets
@@ -16,12 +17,30 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from cfctl import ROOT, Device, live_snapshot
+from cfctl import ROOT, Device, force_stop, live_snapshot
 from instance_store import clone, lock, snapshot, valid_name
 from phone import persistent_disk
 
 
 class StoreTests(unittest.TestCase):
+    def test_force_stop_rejects_foreign_listener_and_qmp_disks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            device = Device("original", 5)
+            device.directory = Path(tmp)
+            (device.directory / "qemu.pid").write_text("42")
+            with patch("cfctl.vm_running", return_value=True), patch("cfctl.tcp_listeners") as listeners, \
+                    patch("cfctl.qmp_connection") as monitor:
+                listeners.return_value = {"43"}
+                with self.assertRaisesRegex(RuntimeError, "端口"):
+                    force_stop(device)
+                monitor.assert_not_called()
+                listeners.return_value = {"42"}
+                query = monitor.return_value.__enter__.return_value
+                query.return_value = []
+                with self.assertRaisesRegex(RuntimeError, "磁盘"):
+                    force_stop(device)
+                query.assert_called_once_with("query-block")
+
     def test_legacy_persistent_disk_stays_raw(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -106,14 +125,61 @@ class BatchTests(unittest.TestCase):
             try:
                 self.cli(name, "device", "stop")
             except Exception:
-                fd = os.open(path / "console.in", os.O_WRONLY | os.O_NONBLOCK)
-                with os.fdopen(fd, "wb", buffering=0) as fifo:
-                    fifo.write(b"\nsu 0 reboot -p\n")
-                for _ in range(60):
-                    if not (path / "qemu.pid").exists():
-                        break
-                    time.sleep(1)
-                self.assertFalse((path / "qemu.pid").exists())
+                self.cli(name, "device", "stop", "--force")
+
+    def test_failed_loadvm_can_force_stop_and_restore_offline(self):
+        with ExitStack() as cleanup:
+            work = Path(tempfile.mkdtemp(prefix="cf-failed-load-", dir="/private/tmp"))
+            def remove_work():
+                self.assertFalse((work / "failed-load/qemu.pid").exists(), f"保留运行目录 {work}")
+                shutil.rmtree(work)
+            cleanup.callback(remove_work)
+            self.env = dict(os.environ, CF_INSTANCE_HOME=work, CF_PHONE_DISPLAY="none")
+            name = "failed-load"
+            directory = Path(work) / name
+            self.cli("recovered", "device", "clone", name, "--clean")
+            try:
+                self.cli(name, "device", "start")
+                marker = "/data/local/tmp/cf-recovery-marker"
+                self.cli(name, "shell", "touch", marker)
+                self.cli(name, "device", "stop")
+                self.cli(name, "snapshot", "save", "offline")
+                self.cli(name, "device", "start")
+                self.cli(name, "shell", "rm", marker)
+                self.cli(name, "snapshot", "live-save", "damaged")
+                self.cli(name, "device", "stop")
+
+                # 在临时实例停机后定位独立 qcow2 簇中的 QEMU 迁移流头。
+                headers = []
+                for filename in ("userdata-overlay.qcow2", "persistent.qcow2"):
+                    path = directory / filename
+                    with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                        cluster = 1 << int.from_bytes(data[20:24], "big")
+                        magic = bytes.fromhex("5145564d00000003")
+                        offset = data.find(magic)
+                        while offset >= 0:
+                            if offset % cluster == 0:
+                                headers.append((path, offset))
+                            offset = data.find(magic, offset + 1)
+                self.assertEqual(len(headers), 1, headers)
+                path, offset = headers[0]
+                with path.open("r+b") as stream:
+                    stream.seek(offset)
+                    stream.write(b"FAIL")
+
+                self.cli(name, "device", "start")
+                failure = self.cli(name, "snapshot", "live-restore", "damaged", success=False)
+                self.assertIn("Error", failure["error"])
+                state = self.cli(name, "doctor")["qmp"]["query-status"]
+                self.assertFalse(state["running"], state)
+                stopped = self.cli(name, "device", "stop", "--force")
+                self.assertTrue(stopped["forced"])
+                self.assertFalse(stopped["guest_shutdown"])
+                self.cli(name, "snapshot", "restore", "offline")
+                self.cli(name, "device", "start")
+                self.cli(name, "shell", "test", "-f", marker)
+            finally:
+                self.ensure_stopped(name)
 
     def test_running_snapshot_restores_ram_and_disks(self):
         with ExitStack() as cleanup:

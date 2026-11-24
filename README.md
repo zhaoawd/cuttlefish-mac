@@ -129,6 +129,8 @@ python3 -B cfctl.py --device qa-one snapshot live-restore before-install
 python3 -B cfctl.py --device qa-one snapshot live-delete before-install
 ```
 
+直启实例加载运行中快照失败时，先执行 `doctor` 查看 `result.qmp.query-status`（使用全局参数 `--json`）。如果来宾已暂停，使用 `device stop --force` 让 QEMU 退出。该命令跳过 Android 关机，未写入磁盘的数据可能丢失。随后可用 `snapshot restore NAME` 恢复已有的关机磁盘快照，再用 `device start` 启动。普通 `device stop` 仍请求 Android 正常关机。
+
 保留 `persistent.raw` 的已有实例可继续使用关机磁盘快照。Darwin `launch_cvd` 的 QEMU 配置包含会阻止迁移的设备。在运行实例上执行 `cfctl.py --device darwin-1 --json doctor`，可从 `result.qmp.query-migrate.blocked-reasons` 查看 QEMU 报告的原因。该字段为空仅表示 QEMU 未报告迁移阻碍。已有的 CVD 冷恢复验收单独验证关机后的磁盘恢复。
 
 ### HTTP 和 WebSocket API

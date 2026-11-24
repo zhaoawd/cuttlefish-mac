@@ -348,11 +348,39 @@ def live_snapshot(device, action, name):
             commands = {"live-save": "savevm", "live-restore": "loadvm", "live-delete": "delvm"}
             message = execute("human-monitor-command", {"command-line": f"{commands[action]} {name}"})
             if message.strip():
+                if action == "live-restore":
+                    raise RuntimeError(f"{message.strip()}。请用 doctor 查看状态；如需退出，请执行 device stop --force")
                 raise RuntimeError(message.strip())
         if action == "live-restore":
             device.run([*LOCAL_ADB, "disconnect", device.serial], check=False)
             device.ready(wait=True)
     return {"device": device.name, "snapshot": name}
+
+
+def force_stop(device):
+    directory = device.directory
+    with lock(directory / "control.lock", deadline=device.deadline):
+        pidfile = directory / "qemu.pid"
+        if not vm_running(directory):
+            raise RuntimeError("未找到所选实例的 QEMU 进程")
+        pid = pidfile.read_text().strip()
+        if tcp_listeners(device, device.port) != {pid}:
+            raise RuntimeError("QEMU 进程未独占所选端口")
+        disks = disk_directory(directory)
+        expected = {"os": disks / OVERLAY, "persist": persistent_disk(disks)[0]}
+        with qmp_connection(directory / ".control/qmp.sock", device.deadline) as execute:
+            blocks = {b["device"]: Path(b["inserted"]["file"]) for b in execute("query-block") if "inserted" in b}
+            if blocks.keys() != expected.keys() or any(not path.samefile(blocks[key]) for key, path in expected.items()):
+                raise RuntimeError("QMP 磁盘与所选实例不符")
+            execute("quit")
+        while time.monotonic() < device.deadline:
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                if not pidfile.exists() and not tcp_listeners(device, device.port):
+                    return {"device": device.name, "forced": True, "guest_shutdown": False}
+            time.sleep(0.1)
+        raise TimeoutError("等待 QEMU 退出并释放端口超时")
 
 
 def diagnose(device):
@@ -431,6 +459,10 @@ def execute(args, *, artifacts=None):
         raise ValueError("请用 --device 指定实例")
     d = Device(args.device, args.timeout)
     action = args.action
+    if args.group == "device" and action == "stop" and args.force:
+        if d.cvd:
+            raise ValueError("强制停机仅支持直启实例")
+        return force_stop(d)
     if d.cvd:
         if args.group == "snapshot" and action.startswith("live-"):
             raise ValueError("运行中快照仅支持独立直启实例。请用 doctor 查看 CVD 的 query-migrate 结果")
@@ -523,6 +555,7 @@ def parser():
         return {cmd: subs.add_parser(cmd) for cmd in commands.split()}
 
     device = actions("device", "list status wait start stop clone delete")
+    device["stop"].add_argument("--force", action="store_true", help="通过 QMP 退出直启实例，跳过 Android 关机")
     device["clone"].add_argument("name")
     device["clone"].add_argument("--port", type=int)
     device["clone"].add_argument("--clean", action="store_true")
