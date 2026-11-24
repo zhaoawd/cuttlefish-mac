@@ -77,7 +77,7 @@
 
 ### 后续验收
 
-- [ ] 在 GitHub 托管的 macos-15 和 ubuntu-24.04 上运行 `tests.yml`，以同一次推送的两个作业均通过为验收条件。
+- [x] GitHub 托管的 macos-15 和 ubuntu-24.04 离线测试已通过。提交 `58d11e0` 的两端结果见 [Host unit tests #45357179653](https://github.com/zhaoawd/cuttlefish-mac/actions/runs/45357179653)。
 - 自托管硬件验收推迟至需要远端调度或有专用实验机时。届时注册双端 ARM64 runner，手动运行 `hardware.yml` 并核对报告比较作业。
 
 ### 后续独立特性
