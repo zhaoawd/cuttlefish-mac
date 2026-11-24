@@ -19,7 +19,7 @@ jobs:
     runs-on: [self-hosted, ARM64, cuttlefish-lab, "${{ matrix.os }}"]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: source-${{ github.run_id }}-${{ github.run_attempt }}
           persist-credentials: false
@@ -33,7 +33,7 @@ jobs:
           python3 -B tests/host_acceptance.py --apk "${CF_APP_APK:?}" --helper "${CF_TEXT_APK:?}" \
             --fixture "${CF_FIXTURE_APK:?}" --out "$RUNNER_TEMP/cf-acceptance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
       - name: Save verification reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hardware-${{ matrix.os }}
           path: |
@@ -47,10 +47,10 @@ jobs:
     needs: hardware
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: hardware-*
           path: reports

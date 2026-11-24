@@ -429,7 +429,7 @@ CF_TEST_FASTBOOT=1 CF_TEST_WORKDIR="$HOME" GUEST_ZIP="$GUEST_ZIP" UNPACK_BOOTIMG
 CF_TEST_FASTBOOT=1 python3 -B -m unittest discover -s tests -p test_fastboot.py -v
 ```
 
-手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、九项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
+手动硬件工作流在默认分支运行同一 `host_acceptance.py` 入口。每个作业需要带 `self-hosted`、`ARM64`、`cuttlefish-lab` 和操作系统标签的专用 runner。工作流使用 Node.js 24，要求 Actions Runner 2.327.1 或更高版本。runner 环境提供 `CF_LAB`（外置测试资源目录的绝对路径）、`CF_APP_APK`、`CF_TEXT_APK`、`CF_FIXTURE_APK`，以及该宿主的 `CF_RUN`、PATH 和 KVM 配置。Mac 和 Linux 须预置相同的 APK。工作流只归档每端的三个 JSON 验收报告，保留三天。比较任务核对应用断言、来宾指纹、测试包摘要、Mac 对照实例、九项设备检查和正常关机。两端的结果目录也可在本机用 `python3 -B tests/compare_hardware.py DARWIN_DIR LINUX_DIR` 比较。远端 runner 注册和实际调度尚待验收。
 
 ### A/B OTA 与回退
 
